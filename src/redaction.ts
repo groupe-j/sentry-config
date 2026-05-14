@@ -1,0 +1,129 @@
+/**
+ * PII redaction by key-name (not regex on values).
+ *
+ * Why key-name: cheap, predictable, no false negatives on well-named fields.
+ * Redaction is visible (`"[REDACTED]"`) so missing data is obvious in Sentry UI
+ * rather than silent.
+ *
+ * Why whole-word + normalization (not substring): substring would over-redact
+ * `ipAddress`, `requestToken`, etc. Normalisation handles `id_card` ≡ `idCard`
+ * ≡ `id-card` (all become `idcard` → match).
+ *
+ * Why WeakSet cycle guard: Sentry events hold cycles via
+ * `contexts.react.componentStack` or error.cause chains from Apollo/Prisma.
+ * A throw in `beforeSend` causes Sentry to silently drop the event —
+ * exactly the failure mode this helper is meant to prevent.
+ */
+
+const SENSITIVE_KEYS = new Set([
+  // Identity
+  "email",
+  "emails",
+  "phone",
+  "phonenumber",
+  "fullname",
+  "firstname",
+  "lastname",
+  "givenname",
+  "familyname",
+  "dateofbirth",
+  "dob",
+
+  // Government ID (Thailand, France, Luxembourg, EU)
+  "passport",
+  "passporturl",
+  "passportnumber",
+  "idcard",
+  "idcardurl",
+  "idcardnumber",
+  "nationalid",
+  "nationalidnumber",
+  "ssn",
+  "socialsecuritynumber",
+  "niss",  // Luxembourg
+  "nif",   // tax IDs
+
+  // Address
+  "address",
+  "streetaddress",
+  "billingaddress",
+  "shippingaddress",
+  "postalcode",
+  "zipcode",
+
+  // Auth + secrets
+  "password",
+  "passwordhash",
+  "secret",
+  "apikey",
+  "accesstoken",
+  "refreshtoken",
+  "sessiontoken",
+  "csrftoken",
+
+  // Payment
+  "cardnumber",
+  "cvv",
+  "cvc",
+  "iban",
+  "swift",
+  "bic",
+]);
+
+export const REDACTED = "[REDACTED]";
+
+export function isSensitive(key: string): boolean {
+  const normalised = key.toLowerCase().replace(/[_-]/g, "");
+  return SENSITIVE_KEYS.has(normalised);
+}
+
+export function redact(value: unknown, seen: WeakSet<object> = new WeakSet()): unknown {
+  if (value === null || value === undefined) return value;
+  if (typeof value !== "object") return value;
+
+  // Cycle guard: return REDACTED rather than the same ref (which would re-enter
+  // on the next traversal anyway).
+  if (seen.has(value)) return REDACTED;
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    return value.map((v) => redact(v, seen));
+  }
+
+  const result: Record<string, unknown> = {};
+  for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
+    if (isSensitive(key)) {
+      result[key] = REDACTED;
+    } else {
+      result[key] = redact(v, seen);
+    }
+  }
+  return result;
+}
+
+/**
+ * Headers that are credentials by another name — strip them entirely.
+ * They have no debug value once an error has fired.
+ */
+const SENSITIVE_HEADERS = new Set([
+  "stripe-signature",
+  "x-knock-signature",
+  "x-webhook-signature",
+  "x-vercel-signature",
+  "x-telegram-bot-api-secret-token",
+  "x-sanity-webhook-signature",
+  "authorization",
+  "proxy-authorization",
+  "cookie",
+  "set-cookie",
+]);
+
+export function scrubHeaders(headers: Record<string, string>): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (!SENSITIVE_HEADERS.has(key.toLowerCase())) {
+      result[key] = value;
+    }
+  }
+  return result;
+}

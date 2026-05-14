@@ -38,6 +38,16 @@ export type InitSentryClientOptions = {
   replayMaskAllText?: boolean;
   /** Block media in Replay (default true). */
   replayBlockAllMedia?: boolean;
+  /**
+   * Same-origin tunnel route to bypass ad-blockers. Match the tunnelRoute you
+   * set in `withSentryConfig`. Example: `'/monitoring'`. Default: none.
+   */
+  tunnel?: string;
+  /**
+   * Send default PII (cookies, headers, IP). Default: false (RGPD-safer).
+   * Set true only when you have explicit user consent and need the data.
+   */
+  sendDefaultPii?: boolean;
 };
 
 export function initSentryClient(opts: InitSentryClientOptions): void {
@@ -49,6 +59,8 @@ export function initSentryClient(opts: InitSentryClientOptions): void {
     replay = true,
     replayMaskAllText = true,
     replayBlockAllMedia = true,
+    tunnel,
+    sendDefaultPii = false,
   } = opts;
 
   const isEnabled = SENTRY_ENABLED && (enabled?.() ?? true);
@@ -62,8 +74,9 @@ export function initSentryClient(opts: InitSentryClientOptions): void {
     replaysSessionSampleRate: replay ? SENTRY_REPLAYS_SESSION_SAMPLE_RATE : 0,
     replaysOnErrorSampleRate: replay ? SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE : 0,
     enabled: isEnabled,
-    sendDefaultPii: false,
+    sendDefaultPii,
     debug: false,
+    ...(tunnel && { tunnel }),
     ignoreErrors: [...DEFAULT_IGNORED_ERRORS, ...ignoreErrors],
     denyUrls: DEFAULT_DENY_URLS,
     integrations: replay

@@ -32,10 +32,23 @@ export type InitSentryServerOptions = {
   ignoreErrors?: Array<string | RegExp>;
   /** Custom integrations to add (in addition to defaults). */
   extraIntegrations?: unknown[];
+  /**
+   * Send default PII (cookies, headers, IP). Default: false (RGPD-safer).
+   * Set true only when you have explicit user consent and need the data
+   * for debugging (e.g. internal admin tools).
+   */
+  sendDefaultPii?: boolean;
 };
 
 export function initSentryServer(opts: InitSentryServerOptions): void {
-  const { app, dsn, prisma = true, ignoreErrors = [], extraIntegrations = [] } = opts;
+  const {
+    app,
+    dsn,
+    prisma = true,
+    ignoreErrors = [],
+    extraIntegrations = [],
+    sendDefaultPii = false,
+  } = opts;
 
   const integrations: unknown[] = [];
   if (prisma) {
@@ -49,7 +62,7 @@ export function initSentryServer(opts: InitSentryServerOptions): void {
     release: process.env.VERCEL_GIT_COMMIT_SHA,
     tracesSampler: createTracesSampler(SENTRY_TRACES_SAMPLE_RATE),
     profilesSampleRate: SENTRY_PROFILES_SAMPLE_RATE,
-    sendDefaultPii: false,
+    sendDefaultPii,
     enabled: SENTRY_ENABLED,
     debug: false,
     ignoreErrors: [...DEFAULT_IGNORED_ERRORS, ...ignoreErrors],

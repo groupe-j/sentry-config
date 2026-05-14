@@ -82,6 +82,22 @@ export function initSentryServer(opts: InitSentryServerOptions): void {
       // @sentry/profiling-node not installed — skip (intentional, no-op).
     }
   }
+
+  // Vercel AI SDK auto-instrumentation. Populates the "AI Agents Overview"
+  // dashboard in Sentry (model name, latency, token usage, errors).
+  // Available in @sentry/nextjs 10.x — lazy-loaded so apps without `ai` package
+  // don't trigger the integration overhead.
+  try {
+    const sentryAny = Sentry as unknown as {
+      vercelAIIntegration?: () => unknown;
+    };
+    if (typeof sentryAny.vercelAIIntegration === "function") {
+      integrations.push(sentryAny.vercelAIIntegration());
+    }
+  } catch {
+    // Integration not available in this SDK version — skip.
+  }
+
   integrations.push(...extraIntegrations);
 
   Sentry.init({

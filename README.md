@@ -106,11 +106,16 @@ const cleaned = redact(myEvent);
 
 ## Migration from inline configs
 
-See `MIGRATION.md` for step-by-step instructions per app type.
+See [MIGRATION.md](./MIGRATION.md) for step-by-step instructions per app type.
+
+## Contributing
+
+- [CONTRIBUTING.md](./CONTRIBUTING.md) — workflow for `@sentry/nextjs` upgrades, adding sensitive keys, semver policy, release process
+- [DECISIONS.md](./DECISIONS.md) — architecture decision records: rationale behind redaction strategy, cycle guard, init helpers, tsup build, optional peer deps
 
 ## Versioning
 
-Semver. Major bumps when sample rate semantics or `beforeSend` shape change. Minor for new helpers. Patch for bug fixes and new sensitive keys.
+Semver. Major bumps when sample rate semantics or `beforeSend` shape change. Minor for new helpers. Patch for bug fixes and new sensitive keys. See [CONTRIBUTING.md → Politique semver](./CONTRIBUTING.md#politique-semver) for the full table.
 
 ## License
 

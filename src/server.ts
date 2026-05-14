@@ -28,6 +28,16 @@ export type InitSentryServerOptions = {
   dsn?: string;
   /** Enable Prisma query instrumentation (default true). */
   prisma?: boolean;
+  /**
+   * Enable Node.js profiling. Default: true (requires @sentry/profiling-node
+   * as a peer dep). Set false if your platform doesn't support it (Vercel
+   * Edge runtime, some serverless providers).
+   *
+   * Profiling captures stack traces at intervals to show CPU usage hotspots.
+   * Sample rate controlled by `profilesSampleRate`. Vercel Fluid Compute (Node
+   * runtime) supports it.
+   */
+  profiling?: boolean;
   /** Extra error patterns to ignore (merged with DEFAULT_IGNORED_ERRORS). */
   ignoreErrors?: Array<string | RegExp>;
   /** Custom integrations to add (in addition to defaults). */
@@ -45,6 +55,7 @@ export function initSentryServer(opts: InitSentryServerOptions): void {
     app,
     dsn,
     prisma = true,
+    profiling = true,
     ignoreErrors = [],
     extraIntegrations = [],
     sendDefaultPii = false,
@@ -53,6 +64,23 @@ export function initSentryServer(opts: InitSentryServerOptions): void {
   const integrations: unknown[] = [];
   if (prisma) {
     integrations.push(Sentry.prismaIntegration());
+  }
+  // Profiling is loaded lazily via require() to avoid making it a hard dep.
+  // If @sentry/profiling-node is installed and profiling is enabled, add the
+  // integration. Otherwise skip silently — apps that don't want profiling
+  // simply don't install the optional peer dep.
+  if (profiling) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const profMod = require("@sentry/profiling-node") as {
+        nodeProfilingIntegration?: () => unknown;
+      };
+      if (typeof profMod.nodeProfilingIntegration === "function") {
+        integrations.push(profMod.nodeProfilingIntegration());
+      }
+    } catch {
+      // @sentry/profiling-node not installed — skip (intentional, no-op).
+    }
   }
   integrations.push(...extraIntegrations);
 

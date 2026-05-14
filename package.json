@@ -1,6 +1,6 @@
 {
   "name": "@groupe-j/sentry-config",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Shared Sentry config + PII redaction for groupe-j apps. Extracted from ridesamui.",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -37,7 +37,13 @@
     "prepublishOnly": "pnpm build && pnpm typecheck"
   },
   "peerDependencies": {
-    "@sentry/nextjs": "^10.0.0"
+    "@sentry/nextjs": "^10.0.0",
+    "@sentry/profiling-node": "^10.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@sentry/profiling-node": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@sentry/nextjs": "^10.53.0",

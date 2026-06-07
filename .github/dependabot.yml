@@ -83,6 +83,11 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "chore(ci)"
+    ignore:
+      # Reusable workflows first-party (repo privé groupe-j/.github), versionnés
+      # à la main et injoignables par Dependabot → git_dependencies_not_reachable.
+      # Le dependency-name d'un reusable workflow est le CHEMIN COMPLET : glob requis.
+      - dependency-name: "groupe-j/.github/*"
 
 # ─── Monorepos : ajouter ces entrées si pnpm-workspace.yaml présent ───
 #  - package-ecosystem: "npm"

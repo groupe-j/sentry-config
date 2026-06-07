@@ -1,0 +1,96 @@
+# Dependabot — config par défaut groupe-j
+# Pour monorepos (Turborepo), ajouter des entrées par workspace en bas du fichier.
+#
+# Le bloc `registries:` donne à Dependabot (security ET version updates) l'accès
+# au registry privé GitHub Packages pour résoudre les @groupe-j/*. Sans lui,
+# Dependabot n'a qu'une credential git_source github.com et échoue en
+# `security_update_not_possible` dès qu'il doit résoudre un package privé.
+#
+# PRÉREQUIS : secret DEPENDABOT (magasin séparé des secrets Actions !) au niveau
+# org, scope read:packages :
+#   gh secret set NPM_TOKEN --app dependabot --org groupe-j --visibility all
+
+version: 2
+
+registries:
+  npm-github:
+    type: npm-registry
+    url: https://npm.pkg.github.com
+    token: ${{secrets.NPM_TOKEN}}
+
+updates:
+  # ─── npm dépendances ───
+  - package-ecosystem: "npm"
+    directory: "/"
+    registries:
+      - npm-github
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Paris"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+      include: "scope"
+    groups:
+      production-minor-patch:
+        dependency-type: "production"
+        update-types: ["minor", "patch"]
+      dev-minor-patch:
+        dependency-type: "development"
+        update-types: ["minor", "patch"]
+      next:
+        patterns: ["next", "@next/*", "eslint-config-next"]
+      react:
+        patterns: ["react", "react-dom", "@types/react*"]
+      types:
+        patterns: ["@types/*"]
+        exclude-patterns: ["@types/react*"]
+      sanity:
+        patterns: ["@sanity/*", "next-sanity", "sanity"]
+      sentry:
+        patterns: ["@sentry/*"]
+      prisma:
+        patterns: ["@prisma/*", "prisma"]
+      better-auth:
+        patterns: ["better-auth", "@better-auth/*"]
+      tailwind:
+        patterns: ["tailwindcss", "@tailwindcss/*", "tailwind-merge"]
+      radix:
+        patterns: ["@radix-ui/*"]
+      trpc:
+        patterns: ["@trpc/*"]
+    ignore:
+      # Contrôle manuel sur les majors critiques (breaking changes potentiels)
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "next"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "prisma"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@prisma/client"
+        update-types: ["version-update:semver-major"]
+
+  # ─── GitHub Actions versions ───
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(ci)"
+
+# ─── Monorepos : ajouter ces entrées si pnpm-workspace.yaml présent ───
+#  - package-ecosystem: "npm"
+#    directory: "/apps/web"
+#    schedule: { interval: "weekly", day: "monday" }
+#    groups: { minor-patch: { update-types: ["minor", "patch"] } }
+#
+#  - package-ecosystem: "npm"
+#    directory: "/packages/db"
+#    schedule: { interval: "weekly", day: "monday" }
+#    groups: { minor-patch: { update-types: ["minor", "patch"] } }

@@ -80,6 +80,21 @@ setSentryUser({
 });
 ```
 
+### Advanced: custom traces sampler
+
+`createTracesSampler` returns a `tracesSampler` function that drops health probes, static assets, and `_next/*` routes automatically. Use it when you need to pass a custom default rate without re-implementing the skip list.
+
+```ts
+import { createTracesSampler } from '@groupe-j/sentry-config';
+
+// Pass to Sentry.init() directly — no need to handle health/static skips yourself.
+Sentry.init({
+  tracesSampler: createTracesSampler(0.05), // 5% custom rate
+});
+```
+
+If you omit the argument, it defaults to `SENTRY_TRACES_SAMPLE_RATE` (10% prod / 100% dev — test environments send 0 events because `SENTRY_ENABLED` is `false`, not because the sampler returns 0).
+
 ### Advanced: custom redaction
 
 ```ts

@@ -55,6 +55,16 @@ declare const SENTRY_PROFILES_SAMPLE_RATE: number;
 declare const SENTRY_REPLAYS_SESSION_SAMPLE_RATE: number;
 declare const SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE = 1;
 declare const SENTRY_ENABLED: boolean;
+/**
+ * Explicit override wins over the Vercel/Node defaults.
+ *
+ * `SENTRY_ENVIRONMENT` is the server-side var. The browser bundle only sees
+ * `NEXT_PUBLIC_*` vars (Next.js inlines those at build time and drops
+ * non-public ones), so client consumers set `NEXT_PUBLIC_SENTRY_ENVIRONMENT`.
+ * Both fall through to `VERCEL_ENV` (prod/preview) and `NODE_ENV` (local/test)
+ * when unset, so dev/preview/prod behaviour is unchanged unless an app opts in
+ * — e.g. a CI e2e run booting under `next start` that wants `environment: "ci"`.
+ */
 declare const SENTRY_ENVIRONMENT: string;
 /**
  * Loose SamplingContext shape — matches @sentry/types without coupling.

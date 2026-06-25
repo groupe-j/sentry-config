@@ -94,9 +94,11 @@ const cleaned = redact(myEvent);
 |-----|-------|---------|
 | `SENTRY_DSN` | Server (Doppler) | server, edge |
 | `NEXT_PUBLIC_SENTRY_DSN` | Client (Doppler → Vercel) | client |
-| `VERCEL_ENV` | Auto on Vercel | environment tag |
+| `SENTRY_ENVIRONMENT` | Optional, server | environment tag (overrides `VERCEL_ENV`/`NODE_ENV`) |
+| `NEXT_PUBLIC_SENTRY_ENVIRONMENT` | Optional, client | environment tag in the browser bundle |
+| `VERCEL_ENV` | Auto on Vercel | environment tag (fallback) |
 | `VERCEL_GIT_COMMIT_SHA` | Auto on Vercel | release tracking |
-| `NODE_ENV` | Auto | sample rates + enabled flag |
+| `NODE_ENV` | Auto | sample rates + enabled flag + environment fallback |
 
 ## What this does NOT do
 

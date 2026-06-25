@@ -165,7 +165,7 @@ var SENTRY_TRACES_SAMPLE_RATE = process.env.NODE_ENV === "production" ? 0.1 : 1;
 process.env.NODE_ENV === "production" ? 0.1 : 1;
 process.env.NODE_ENV === "production" ? 0.1 : 0;
 var SENTRY_ENABLED = process.env.NODE_ENV !== "test";
-var SENTRY_ENVIRONMENT = process.env.VERCEL_ENV ?? process.env.NODE_ENV ?? "development";
+var SENTRY_ENVIRONMENT = process.env.SENTRY_ENVIRONMENT ?? process.env.NEXT_PUBLIC_SENTRY_ENVIRONMENT ?? process.env.VERCEL_ENV ?? process.env.NODE_ENV ?? "development";
 var SKIP_PATTERNS = [
   /\/api\/health$/,
   /\/api\/healthz$/,

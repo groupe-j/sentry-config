@@ -93,7 +93,7 @@ Sentry.init({
 });
 ```
 
-If you omit the argument, it defaults to `SENTRY_TRACES_SAMPLE_RATE` (10% prod / 100% dev / 0% test).
+If you omit the argument, it defaults to `SENTRY_TRACES_SAMPLE_RATE` (10% prod / 100% dev — test environments send 0 events because `SENTRY_ENABLED` is `false`, not because the sampler returns 0).
 
 ### Advanced: custom redaction
 

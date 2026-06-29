@@ -13,6 +13,8 @@ Shared Sentry configuration with battle-tested PII redaction. Extracted from `ri
 - **Init helpers** (`initSentryClient`, `initSentryServer`, `initSentryEdge`) — 3 lines per app instead of 40
 - **User context helper** (`setSentryUser`) for post-auth tagging with tenant/plan
 - **Bot detection** to filter crawler noise
+- **tRPC → Sentry capture** (`createTrpcSentryOnError`) — one tested `onError` for `fetchRequestHandler`, skips client faults, captures the underlying `cause`
+- **Arming guard** (`assertSentryArmed`) — fail loudly when a missing DSN turns Sentry into a silent no-op
 - **Cycle-safe** PII walker (WeakSet guard against componentStack / Apollo error.cause loops)
 
 ## Install
@@ -79,6 +81,60 @@ setSentryUser({
   plan: subscription.plan, // 'free' | 'premium' | 'enterprise'
 });
 ```
+
+### Capture tRPC errors to Sentry
+
+Use as the `onError` of `@trpc/server`'s `fetchRequestHandler`. It skips
+client-fault codes (`BAD_REQUEST`, `UNAUTHORIZED`, `NOT_FOUND`, rate limits, …)
+and captures everything else — reporting `error.cause ?? error` so Sentry groups
+issues by the real root fault (e.g. the Prisma exception) rather than collapsing
+them into one generic `TRPCError`.
+
+```ts
+// app/api/trpc/[trpc]/route.ts
+import * as Sentry from '@sentry/nextjs';
+import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
+import { createTrpcSentryOnError } from '@groupe-j/sentry-config';
+
+const onError = createTrpcSentryOnError(Sentry);
+
+function handler(req: Request) {
+  return fetchRequestHandler({
+    req,
+    endpoint: '/api/trpc',
+    router: appRouter,
+    createContext,
+    onError, // tagged with { trpcPath, trpcType }
+  });
+}
+
+export { handler as GET, handler as POST };
+```
+
+The Sentry instance is injected, so the same helper works with `@sentry/nextjs`,
+`@sentry/node`, or any SDK exposing `captureException`. The
+`shouldReportTrpcError(code)` predicate is exported too if you need the
+client-vs-server decision elsewhere.
+
+### Assert Sentry is actually armed
+
+A missing/empty DSN makes the SDK install a no-op client — the app looks healthy
+while every `captureException` goes nowhere (the GRO-295 blind spot). Call
+`assertSentryArmed` right after init to fail visibly instead:
+
+```ts
+import * as Sentry from '@sentry/nextjs';
+import { initSentryServer, assertSentryArmed } from '@groupe-j/sentry-config';
+
+initSentryServer({ app: 'portal' });
+assertSentryArmed(Sentry, {
+  // log loudly everywhere; hard-fail the boot only in prod
+  throwOnMissing: process.env.NODE_ENV === 'production',
+});
+```
+
+Returns `true` when a DSN is present; otherwise logs a loud `console.error` and
+returns `false` (or throws when `throwOnMissing` is set).
 
 ### Advanced: custom traces sampler
 

@@ -39,3 +39,19 @@ export { isBot } from "./bot.js";
 export { DEFAULT_DENY_URLS, DEFAULT_IGNORED_ERRORS } from "./ignored.js";
 
 export { withCronMonitor, type CronMonitorOptions } from "./crons.js";
+
+export {
+  createTrpcSentryOnError,
+  shouldReportTrpcError,
+  type TrpcErrorType,
+  type TrpcErrorLike,
+  type TrpcOnErrorPayload,
+  type TrpcSentryLike,
+} from "./trpc.js";
+
+export {
+  assertSentryArmed,
+  type AssertSentryArmedOptions,
+  type SentryArmedLike,
+  type SentryClientLike,
+} from "./armed.js";

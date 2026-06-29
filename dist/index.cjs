@@ -247,6 +247,50 @@ function withCronMonitor(monitorSlug, handler, options) {
   };
 }
 
+// src/trpc.ts
+var CLIENT_FAULT_CODES = /* @__PURE__ */ new Set([
+  "BAD_REQUEST",
+  "UNAUTHORIZED",
+  "FORBIDDEN",
+  "NOT_FOUND",
+  "TIMEOUT",
+  "CONFLICT",
+  "PRECONDITION_FAILED",
+  "PAYLOAD_TOO_LARGE",
+  "METHOD_NOT_SUPPORTED",
+  "UNPROCESSABLE_CONTENT",
+  "TOO_MANY_REQUESTS",
+  "CLIENT_CLOSED_REQUEST"
+]);
+function shouldReportTrpcError(code) {
+  return !CLIENT_FAULT_CODES.has(code);
+}
+function createTrpcSentryOnError(Sentry3) {
+  return ({ error, path, type }) => {
+    if (!shouldReportTrpcError(error.code)) return;
+    Sentry3.captureException(error.cause ?? error, {
+      tags: {
+        trpcPath: path ?? "<no-path>",
+        trpcType: type
+      }
+    });
+  };
+}
+
+// src/armed.ts
+function assertSentryArmed(Sentry3, options = {}) {
+  const { throwOnMissing = false } = options;
+  const dsn = Sentry3.getClient()?.getDsn();
+  if (dsn) return true;
+  const message = "[sentry-config] Sentry is NOT armed: getClient().getDsn() is empty. Errors will be silently dropped. Check SENTRY_DSN / Sentry.init in this runtime.";
+  if (throwOnMissing) {
+    console.error(message);
+    throw new Error(message);
+  }
+  console.error(message);
+  return false;
+}
+
 exports.DEFAULT_DENY_URLS = DEFAULT_DENY_URLS;
 exports.DEFAULT_IGNORED_ERRORS = DEFAULT_IGNORED_ERRORS;
 exports.REDACTED = REDACTED;
@@ -256,14 +300,17 @@ exports.SENTRY_PROFILES_SAMPLE_RATE = SENTRY_PROFILES_SAMPLE_RATE;
 exports.SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE = SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE;
 exports.SENTRY_REPLAYS_SESSION_SAMPLE_RATE = SENTRY_REPLAYS_SESSION_SAMPLE_RATE;
 exports.SENTRY_TRACES_SAMPLE_RATE = SENTRY_TRACES_SAMPLE_RATE;
+exports.assertSentryArmed = assertSentryArmed;
 exports.clearSentryUser = clearSentryUser;
 exports.createSentryBeforeSend = createSentryBeforeSend;
 exports.createTracesSampler = createTracesSampler;
+exports.createTrpcSentryOnError = createTrpcSentryOnError;
 exports.isBot = isBot;
 exports.isSensitive = isSensitive;
 exports.redact = redact;
 exports.scrubHeaders = scrubHeaders;
 exports.setSentryUser = setSentryUser;
+exports.shouldReportTrpcError = shouldReportTrpcError;
 exports.withCronMonitor = withCronMonitor;
 //# sourceMappingURL=index.cjs.map
 //# sourceMappingURL=index.cjs.map

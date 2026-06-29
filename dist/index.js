@@ -225,6 +225,50 @@ function withCronMonitor(monitorSlug, handler, options) {
   };
 }
 
-export { DEFAULT_DENY_URLS, DEFAULT_IGNORED_ERRORS, REDACTED, SENTRY_ENABLED, SENTRY_ENVIRONMENT, SENTRY_PROFILES_SAMPLE_RATE, SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE, SENTRY_REPLAYS_SESSION_SAMPLE_RATE, SENTRY_TRACES_SAMPLE_RATE, clearSentryUser, createSentryBeforeSend, createTracesSampler, isBot, isSensitive, redact, scrubHeaders, setSentryUser, withCronMonitor };
+// src/trpc.ts
+var CLIENT_FAULT_CODES = /* @__PURE__ */ new Set([
+  "BAD_REQUEST",
+  "UNAUTHORIZED",
+  "FORBIDDEN",
+  "NOT_FOUND",
+  "TIMEOUT",
+  "CONFLICT",
+  "PRECONDITION_FAILED",
+  "PAYLOAD_TOO_LARGE",
+  "METHOD_NOT_SUPPORTED",
+  "UNPROCESSABLE_CONTENT",
+  "TOO_MANY_REQUESTS",
+  "CLIENT_CLOSED_REQUEST"
+]);
+function shouldReportTrpcError(code) {
+  return !CLIENT_FAULT_CODES.has(code);
+}
+function createTrpcSentryOnError(Sentry3) {
+  return ({ error, path, type }) => {
+    if (!shouldReportTrpcError(error.code)) return;
+    Sentry3.captureException(error.cause ?? error, {
+      tags: {
+        trpcPath: path ?? "<no-path>",
+        trpcType: type
+      }
+    });
+  };
+}
+
+// src/armed.ts
+function assertSentryArmed(Sentry3, options = {}) {
+  const { throwOnMissing = false } = options;
+  const dsn = Sentry3.getClient()?.getDsn();
+  if (dsn) return true;
+  const message = "[sentry-config] Sentry is NOT armed: getClient().getDsn() is empty. Errors will be silently dropped. Check SENTRY_DSN / Sentry.init in this runtime.";
+  if (throwOnMissing) {
+    console.error(message);
+    throw new Error(message);
+  }
+  console.error(message);
+  return false;
+}
+
+export { DEFAULT_DENY_URLS, DEFAULT_IGNORED_ERRORS, REDACTED, SENTRY_ENABLED, SENTRY_ENVIRONMENT, SENTRY_PROFILES_SAMPLE_RATE, SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE, SENTRY_REPLAYS_SESSION_SAMPLE_RATE, SENTRY_TRACES_SAMPLE_RATE, assertSentryArmed, clearSentryUser, createSentryBeforeSend, createTracesSampler, createTrpcSentryOnError, isBot, isSensitive, redact, scrubHeaders, setSentryUser, shouldReportTrpcError, withCronMonitor };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

@@ -36,6 +36,43 @@ For **Vercel** deploys: add `NPM_TOKEN` env var with the same token. Vercel auto
 
 For **GitHub Actions**: use `${{ secrets.GITHUB_TOKEN }}` — auto-provided, no setup.
 
+## ⚠️ Required for Next.js 16 (Turbopack): `serverExternalPackages`
+
+**Every consumer of `@groupe-j/sentry-config/server` must add this to their
+`next.config.ts`** — otherwise the production build fails.
+
+```ts
+// next.config.ts
+import type { NextConfig } from 'next';
+
+const nextConfig: NextConfig = {
+  // Keep the native Sentry server SDKs OUT of the Turbopack bundle.
+  serverExternalPackages: ['@sentry/node', '@sentry/profiling-node'],
+};
+
+export default nextConfig;
+```
+
+**Why.** `@groupe-j/sentry-config/server` (via `initSentryServer`) transitively
+pulls in `@sentry/node` and `@sentry/profiling-node`. When Next 16 Turbopack
+tries to bundle those, it walks their OpenTelemetry instrumentation graph and
+the build dies with:
+
+```
+Module not found: Can't resolve '@opentelemetry/instrumentation'
+```
+
+This is **not** a missing dependency — you do not need to `pnpm add
+@opentelemetry/instrumentation`. It is Turbopack bundling a package that must
+stay external. Listing both SDKs in `serverExternalPackages` tells Next to load
+them from `node_modules` at runtime instead of bundling them, which resolves the
+error.
+
+> This is the systemic root of **GRO-523** — the build break reproduces in
+> every app that wires up the server SDK without this config. If you `withSentryConfig`
+> your `next.config`, keep the `serverExternalPackages` key on the base config
+> object (it is preserved through the wrapper).
+
 ## Usage
 
 ### `sentry.client.config.ts`

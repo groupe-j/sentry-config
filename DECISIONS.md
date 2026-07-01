@@ -188,6 +188,39 @@ Un walker récursif naïf rentre en boucle infinie → throw `RangeError: Maximu
 
 ---
 
+## 13. Consumers doivent déclarer `serverExternalPackages` (Next 16 / Turbopack)
+
+**Contexte** : `@groupe-j/sentry-config/server` tire transitivement `@sentry/node`
+et `@sentry/profiling-node` (SDK serveur natifs). Sous Next.js 16, Turbopack tente
+de **bundler** ces packages et suit leur graphe d'instrumentation OpenTelemetry →
+le build casse avec `Module not found: Can't resolve '@opentelemetry/instrumentation'`.
+
+**Décision** : Ne **pas** vendorer ni forcer une résolution de
+`@opentelemetry/instrumentation` dans ce package. À la place, **documenter** dans le
+README que chaque app consommatrice doit ajouter à son `next.config` :
+
+```ts
+serverExternalPackages: ['@sentry/node', '@sentry/profiling-node'],
+```
+
+**Pourquoi** :
+- L'erreur n'est **pas** une dépendance manquante — ajouter `@opentelemetry/instrumentation`
+  masquerait le vrai problème (Turbopack bundle un package qui doit rester externe)
+  et gonflerait le bundle serveur.
+- `serverExternalPackages` est un réglage **côté app** (build config Next), pas
+  quelque chose qu'un package de lib peut imposer à ses consommateurs.
+- Les SDK Sentry natifs doivent être chargés depuis `node_modules` au runtime, pas
+  inlinés — c'est le comportement voulu par Sentry aussi.
+
+**Conséquences si renversé** : si on essaie de "régler" ça en ajoutant
+`@opentelemetry/instrumentation` comme dépendance ici, on cache le symptôme sans
+corriger la cause, et le build casse à nouveau dès qu'une app oublie le réglage.
+C'est la racine systémique de **GRO-523** (au moment de la doc, seul jepeuxconstruire
+avait le réglage correct). La bonne prévention est la doc + un check d'audit
+portfolio, pas un patch dans la lib.
+
+---
+
 ## Comment ajouter une nouvelle décision
 
 Quand tu fais un choix non-évident lors d'un futur refactor :

@@ -36,6 +36,23 @@ type InitSentryServerOptions = {
      * for debugging (e.g. internal admin tools).
      */
     sendDefaultPii?: boolean;
+    /**
+     * Override the Sentry transport factory. Passed straight through to
+     * `Sentry.init({ transport })`; when omitted the SDK's own transport is used
+     * (no behaviour change).
+     *
+     * Escape hatch for getsentry/sentry-javascript#18871: under Next 16 +
+     * Turbopack, the default `makeNodeTransport` (SDK v10.32–10.34) calls
+     * `suppressTracing()`, which breaks the OpenTelemetry async context and
+     * silently drops *server-side* events — the app looks healthy while
+     * `captureException` goes nowhere. Prefer upgrading out of that range (see
+     * README → "Next 16 + Turbopack blind spot"); if you're pinned to it, inject
+     * a fetch-based transport built from the SDK's `createTransport` here.
+     *
+     * Left untyped-as-`unknown` on purpose so this package needn't depend on the
+     * SDK's internal transport types; `Sentry.init` validates it at runtime.
+     */
+    transport?: unknown;
 };
 declare function initSentryServer(opts: InitSentryServerOptions): void;
 

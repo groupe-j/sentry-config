@@ -277,6 +277,36 @@ function createTrpcSentryOnError(Sentry3) {
   };
 }
 
+// src/trpc-middleware.ts
+function createSentryTrpcMiddleware(Sentry3, options = {}) {
+  const { attachRpcInput = true, ...rest } = options;
+  return Sentry3.trpcMiddleware({ attachRpcInput, ...rest });
+}
+
+// src/transport.ts
+function createFetchTransportFactory(createTransport, fetchImpl = fetch) {
+  return (options) => createTransport(options, async (request) => {
+    const response = await fetchImpl(options.url, {
+      method: "POST",
+      // Envelopes are already-encoded strings/bytes; forward as-is. A
+      // Uint8Array is a valid BodyInit at runtime; the cast placates the
+      // stricter lib.dom generic.
+      body: request.body,
+      headers: options.headers,
+      // Keep the request alive past a serverless function returning its
+      // response, so the last events aren't dropped on shutdown.
+      keepalive: true
+    });
+    return {
+      statusCode: response.status,
+      headers: {
+        "x-sentry-rate-limits": response.headers.get("x-sentry-rate-limits"),
+        "retry-after": response.headers.get("retry-after")
+      }
+    };
+  });
+}
+
 // src/armed.ts
 function assertSentryArmed(Sentry3, options = {}) {
   const { throwOnMissing = false } = options;
@@ -302,7 +332,9 @@ exports.SENTRY_REPLAYS_SESSION_SAMPLE_RATE = SENTRY_REPLAYS_SESSION_SAMPLE_RATE;
 exports.SENTRY_TRACES_SAMPLE_RATE = SENTRY_TRACES_SAMPLE_RATE;
 exports.assertSentryArmed = assertSentryArmed;
 exports.clearSentryUser = clearSentryUser;
+exports.createFetchTransportFactory = createFetchTransportFactory;
 exports.createSentryBeforeSend = createSentryBeforeSend;
+exports.createSentryTrpcMiddleware = createSentryTrpcMiddleware;
 exports.createTracesSampler = createTracesSampler;
 exports.createTrpcSentryOnError = createTrpcSentryOnError;
 exports.isBot = isBot;

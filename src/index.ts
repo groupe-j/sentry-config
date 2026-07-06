@@ -50,6 +50,20 @@ export {
 } from "./trpc.js";
 
 export {
+  createSentryTrpcMiddleware,
+  type SentryTrpcMiddlewareOptions,
+  type SentryTrpcMiddlewareLike,
+} from "./trpc-middleware.js";
+
+export {
+  createFetchTransportFactory,
+  type FetchTransportOptions,
+  type FetchTransportRequest,
+  type FetchTransportResponse,
+  type CreateTransportFn,
+} from "./transport.js";
+
+export {
   assertSentryArmed,
   type AssertSentryArmedOptions,
   type SentryArmedLike,

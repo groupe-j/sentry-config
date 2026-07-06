@@ -218,7 +218,8 @@ function initSentryServer(opts) {
     profiling = true,
     ignoreErrors = [],
     extraIntegrations = [],
-    sendDefaultPii = false
+    sendDefaultPii = false,
+    transport
   } = opts;
   const integrations = [];
   if (prisma) {
@@ -253,7 +254,10 @@ function initSentryServer(opts) {
     ignoreErrors: [...DEFAULT_IGNORED_ERRORS, ...ignoreErrors],
     integrations,
     beforeSend: createSentryBeforeSend(app),
-    _experiments: { enableLogs: true }
+    _experiments: { enableLogs: true },
+    // Opt-in transport override (getsentry/sentry-javascript#18871). Only spread
+    // when provided so the SDK default is preserved for healthy setups.
+    ...transport !== void 0 ? { transport } : {}
   });
 }
 

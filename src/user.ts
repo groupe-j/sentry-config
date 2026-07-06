@@ -10,7 +10,7 @@
 
 import * as Sentry from "@sentry/nextjs";
 
-export type SentryUserContext = {
+export interface SentryUserContext {
   /** Stable user identifier (DB id, NOT email). */
   id: string;
   /** Optional — only set if email is OK to send (consider PDPA/RGPD). */
@@ -19,7 +19,7 @@ export type SentryUserContext = {
   tenant?: string;
   /** Plan tier (free/premium/enterprise) — useful for "is this a paying client?". */
   plan?: string;
-};
+}
 
 export function setSentryUser(user: SentryUserContext): void {
   Sentry.setUser({
@@ -32,6 +32,6 @@ export function setSentryUser(user: SentryUserContext): void {
 
 export function clearSentryUser(): void {
   Sentry.setUser(null);
-  Sentry.setTag("tenant", undefined as unknown as string);
-  Sentry.setTag("plan", undefined as unknown as string);
+  Sentry.setTag("tenant", undefined);
+  Sentry.setTag("plan", undefined);
 }

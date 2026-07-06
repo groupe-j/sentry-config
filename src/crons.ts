@@ -26,7 +26,7 @@
 
 import * as Sentry from "@sentry/nextjs";
 
-export type CronMonitorOptions = {
+export interface CronMonitorOptions {
   /**
    * Crontab schedule string (e.g., '0 6 * * *' for 6am daily).
    * MUST match the Vercel cron schedule exactly — Sentry uses this to
@@ -57,7 +57,7 @@ export type CronMonitorOptions = {
    * Default: 1.
    */
   recoveryThreshold?: number;
-};
+}
 
 /**
  * Wraps a Next.js route handler (typically a cron GET) with Sentry monitoring.

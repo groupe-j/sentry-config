@@ -21,7 +21,7 @@ import {
   createTracesSampler,
 } from "./sampling.js";
 
-export type InitSentryServerOptions = {
+export interface InitSentryServerOptions {
   /** App name — tagged on every event for multi-tenant dashboards. */
   app: string;
   /** Override the server DSN (default: process.env.SENTRY_DSN). */
@@ -39,7 +39,7 @@ export type InitSentryServerOptions = {
    */
   profiling?: boolean;
   /** Extra error patterns to ignore (merged with DEFAULT_IGNORED_ERRORS). */
-  ignoreErrors?: Array<string | RegExp>;
+  ignoreErrors?: (string | RegExp)[];
   /** Custom integrations to add (in addition to defaults). */
   extraIntegrations?: unknown[];
   /**
@@ -64,7 +64,7 @@ export type InitSentryServerOptions = {
    * internal transport types; `Sentry.init` validates it at runtime.
    */
   transport?: unknown;
-};
+}
 
 export function initSentryServer(opts: InitSentryServerOptions): void {
   const {

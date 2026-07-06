@@ -15,7 +15,7 @@ Shared Sentry configuration with battle-tested PII redaction. Extracted from `ri
 - **Bot detection** to filter crawler noise
 - **tRPC → Sentry capture** — two integration points: `createTrpcSentryOnError` (tested `onError` for `fetchRequestHandler`) and `createSentryTrpcMiddleware` (wraps the SDK's `trpcMiddleware`, captures resolver throws *with input* at the procedure layer)
 - **Arming guard** (`assertSentryArmed`) — fail loudly when a missing DSN turns Sentry into a silent no-op
-- **Next 16 + Turbopack transport escape hatch** — opt-in `transport` override on `initSentryServer` for the SDK bug that silently drops server events
+- **Next 16 + Turbopack safety** — peer range excludes the SDK window (#18871) that silently drops server events, plus an opt-in `transport` override on `initSentryServer` for any future transport swap
 - **Cycle-safe** PII walker (WeakSet guard against componentStack / Apollo error.cause loops)
 
 ## Install
@@ -210,45 +210,28 @@ returns `false` (or throws when `throwOnMissing` is set).
 
 ### Next 16 + Turbopack blind spot (SDK #18871)
 
-Under **Next 16 + Turbopack**, some `@sentry/nextjs` releases (**v10.32–10.34**)
-ship a `makeNodeTransport` that calls `suppressTracing()` internally. That call
-breaks the OpenTelemetry async context and **silently drops server-side
-events** — `captureException` returns cleanly, the app looks healthy, and
-nothing reaches Sentry (the same class of blind spot as a missing DSN). See
+Under **Next 16 + Turbopack**, `@sentry/nextjs` **v10.32–10.34** shipped a
+`makeNodeTransport` that calls `suppressTracing()` internally. That call breaks
+the OpenTelemetry async context and **silently drops server-side events** —
+`captureException` returns cleanly, the app looks healthy, and nothing reaches
+Sentry (the same class of blind spot as a missing DSN). See
 [getsentry/sentry-javascript#18871](https://github.com/getsentry/sentry-javascript/issues/18871).
 
-**Fix, in order of preference:**
+**You are already protected.** This package pins
+`@sentry/nextjs` to **`>=10.63.0 <11`**, so the affected 10.32–10.34 window is
+excluded by the peer constraint — you can't install into it through this
+package. The apps in this org run 10.63+.
 
-1. **Stay out of the affected range.** This package's peer range is
-   `@sentry/nextjs@^10.0.0`; caret semver can't express "not 10.32–10.34", so
-   the guard is a convention, not a lockfile constraint. Pin **`>=10.35`** (the
-   apps in this org run 10.53+). `assertSentryArmed` does *not* catch this — the
-   client is armed, the transport just eats events — so confirm a test event
-   actually lands in Sentry after any Next/Turbopack upgrade.
+Two operational notes:
 
-2. **If you're pinned to an affected version**, inject a fetch-based transport
-   via the opt-in `transport` option. The Node SDK ships no ready-made fetch
-   transport (`makeFetchTransport` is browser-only), so this package builds one
-   from the SDK's low-level `createTransport` — it bypasses `makeNodeTransport`
-   entirely:
-
-   ```ts
-   import * as Sentry from '@sentry/nextjs';
-   import {
-     initSentryServer,
-     createFetchTransportFactory,
-   } from '@groupe-j/sentry-config';
-
-   initSentryServer({
-     app: 'portal',
-     // Escape hatch only — omit on healthy SDK versions so the SDK's own
-     // (correct) transport is used.
-     transport: createFetchTransportFactory(Sentry.createTransport),
-   });
-   ```
-
-   `transport` is passed straight through to `Sentry.init`. When omitted (the
-   default) the SDK's own transport is used and behaviour is unchanged.
+- `assertSentryArmed` does **not** catch a transport that eats events (the
+  client is armed, the DSN is present). After any Next/Turbopack/SDK upgrade,
+  confirm a real test event actually lands in Sentry.
+- If a *future* SDK regression ever needs a different transport, `initSentryServer`
+  accepts an opt-in `transport` option that passes straight through to
+  `Sentry.init({ transport })`. Omit it (the default) and the SDK's own
+  transport is used — no behaviour change. It exists so you never have to fork
+  the init helper to swap a transport.
 
 ### Advanced: custom traces sampler
 

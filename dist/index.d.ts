@@ -306,88 +306,47 @@ interface SentryTrpcMiddlewareOptions {
      * Include the procedure input in the reported event. Defaults to `true` here
      * (the SDK default is `false`) — capturing the input is the main reason to
      * use the middleware over the `onError` path. Set `false` if inputs may carry
-     * PII the redaction layer doesn't cover.
+     * free-form PII the (key-name-based) redaction layer doesn't cover.
      */
     attachRpcInput?: boolean;
     /** Force a transaction (span) even when there's no active parent. */
     forceTransaction?: boolean;
 }
 /**
+ * The argument shape the returned middleware receives — mirrors the SDK's
+ * `SentryTrpcMiddlewareArguments` so the generic `next()` return type flows
+ * through to tRPC's `middleware()` (which requires the callback to return a
+ * `Promise<MiddlewareResult>`; a flattened `unknown` would not type-check).
+ */
+interface SentryTrpcMiddlewareArguments<T> {
+    path?: unknown;
+    type?: unknown;
+    next: () => T;
+    rawInput?: unknown;
+    getRawInput?: () => Promise<unknown>;
+}
+/** The SDK forces the callback to be async: `T` if already a promise, else `Promise<T>`. */
+type SentryTrpcMiddlewareResult<T> = T extends Promise<unknown> ? T : Promise<T>;
+/** The middleware function `trpcMiddleware()` returns — pass to `t.middleware(...)`. */
+type SentryTrpcMiddleware = <T>(opts: SentryTrpcMiddlewareArguments<T>) => SentryTrpcMiddlewareResult<T>;
+/**
  * Minimal structural shape of the SDK needed to build the middleware — satisfied
- * by `@sentry/nextjs`, `@sentry/node`, etc. `trpcMiddleware` returns a function
- * matching tRPC's middleware signature.
+ * by `@sentry/nextjs`, `@sentry/node`, etc. Kept faithful to the real
+ * `trpcMiddleware` signature so the wrapper's return type is identical to
+ * calling `Sentry.trpcMiddleware()` directly.
  */
 interface SentryTrpcMiddlewareLike {
-    trpcMiddleware: (options?: SentryTrpcMiddlewareOptions) => (opts: unknown) => unknown;
+    trpcMiddleware: (options?: SentryTrpcMiddlewareOptions) => SentryTrpcMiddleware;
 }
 /**
  * Builds a Sentry tRPC middleware ready to pass to `t.middleware(...)`.
  *
  * Defaults `attachRpcInput` to `true` so resolver throws are captured *with*
  * their input (the whole point of the middleware over the `onError` backstop).
- * Everything else is forwarded untouched.
+ * Everything else is forwarded untouched. The return type is exactly what
+ * `Sentry.trpcMiddleware()` returns, so it drops into `t.middleware()` unchanged.
  */
-declare function createSentryTrpcMiddleware(Sentry: SentryTrpcMiddlewareLike, options?: SentryTrpcMiddlewareOptions): (opts: unknown) => unknown;
-
-/**
- * Fetch-based Sentry transport factory — the escape hatch for
- * getsentry/sentry-javascript#18871.
- *
- * Under Next 16 + Turbopack, the Node SDK's default `makeNodeTransport`
- * (v10.32–10.34) calls `suppressTracing()`, which breaks the OpenTelemetry async
- * context and silently drops server-side events. A fetch-based transport doesn't
- * go through that code path, so events flow again.
- *
- * The Node SDK does **not** ship a ready-made fetch transport (`makeFetchTransport`
- * is browser-only), so this builds one from the SDK's low-level `createTransport`.
- * `createTransport` is injected rather than imported, keeping this package free of
- * a direct `@sentry/*` dependency:
- *
- *   import * as Sentry from '@sentry/nextjs';
- *   import { initSentryServer, createFetchTransportFactory } from '@groupe-j/sentry-config';
- *
- *   initSentryServer({
- *     app: 'portal',
- *     // Only on an affected SDK version — omit on healthy ones.
- *     transport: createFetchTransportFactory(Sentry.createTransport),
- *   });
- *
- * Prefer upgrading out of the affected range (see README). This is for setups
- * pinned to it.
- */
-/** The request the SDK hands to a transport's `makeRequest` executor. */
-interface FetchTransportRequest {
-    body: string | Uint8Array;
-}
-/**
- * What the executor must return. `createTransport`'s buffer reads `statusCode`
- * and the rate-limit headers to drive backpressure and drop-event accounting.
- */
-interface FetchTransportResponse {
-    statusCode?: number;
-    headers?: {
-        "x-sentry-rate-limits": string | null;
-        "retry-after": string | null;
-    };
-}
-/** Runtime transport options the SDK supplies (`url` + optional `headers`). */
-interface FetchTransportOptions {
-    url: string;
-    headers?: Record<string, string>;
-}
-/**
- * Structural shape of the SDK's `createTransport`. Generic over the transport it
- * returns so the caller's `Sentry.createTransport` type flows through unchanged.
- */
-type CreateTransportFn<T> = (options: FetchTransportOptions, makeRequest: (request: FetchTransportRequest) => PromiseLike<FetchTransportResponse>) => T;
-/**
- * Builds a `transport` factory (the shape `Sentry.init({ transport })` expects)
- * that sends envelopes with the global `fetch` instead of the Node http module.
- *
- * @param createTransport the SDK's `createTransport` (e.g. `Sentry.createTransport`)
- * @param fetchImpl override `fetch` (tests / custom agents); defaults to global `fetch`
- */
-declare function createFetchTransportFactory<T>(createTransport: CreateTransportFn<T>, fetchImpl?: typeof fetch): (options: FetchTransportOptions) => T;
+declare function createSentryTrpcMiddleware(Sentry: SentryTrpcMiddlewareLike, options?: SentryTrpcMiddlewareOptions): SentryTrpcMiddleware;
 
 /**
  * Guard that a Sentry SDK is actually "armed" — i.e. initialised with a real
@@ -432,4 +391,4 @@ interface AssertSentryArmedOptions {
  */
 declare function assertSentryArmed(Sentry: SentryArmedLike, options?: AssertSentryArmedOptions): boolean;
 
-export { type AssertSentryArmedOptions, type CreateTransportFn, type CronMonitorOptions, DEFAULT_DENY_URLS, DEFAULT_IGNORED_ERRORS, type FetchTransportOptions, type FetchTransportRequest, type FetchTransportResponse, REDACTED, SENTRY_ENABLED, SENTRY_ENVIRONMENT, SENTRY_PROFILES_SAMPLE_RATE, SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE, SENTRY_REPLAYS_SESSION_SAMPLE_RATE, SENTRY_TRACES_SAMPLE_RATE, type SentryArmedLike, type SentryClientLike, type SentryEventLike, type SentryTrpcMiddlewareLike, type SentryTrpcMiddlewareOptions, type SentryUserContext, type TrpcErrorLike, type TrpcErrorType, type TrpcOnErrorPayload, type TrpcSentryLike, assertSentryArmed, clearSentryUser, createFetchTransportFactory, createSentryBeforeSend, createSentryTrpcMiddleware, createTracesSampler, createTrpcSentryOnError, isBot, isSensitive, redact, scrubHeaders, setSentryUser, shouldReportTrpcError, withCronMonitor };
+export { type AssertSentryArmedOptions, type CronMonitorOptions, DEFAULT_DENY_URLS, DEFAULT_IGNORED_ERRORS, REDACTED, SENTRY_ENABLED, SENTRY_ENVIRONMENT, SENTRY_PROFILES_SAMPLE_RATE, SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE, SENTRY_REPLAYS_SESSION_SAMPLE_RATE, SENTRY_TRACES_SAMPLE_RATE, type SentryArmedLike, type SentryClientLike, type SentryEventLike, type SentryTrpcMiddleware, type SentryTrpcMiddlewareArguments, type SentryTrpcMiddlewareLike, type SentryTrpcMiddlewareOptions, type SentryTrpcMiddlewareResult, type SentryUserContext, type TrpcErrorLike, type TrpcErrorType, type TrpcOnErrorPayload, type TrpcSentryLike, assertSentryArmed, clearSentryUser, createSentryBeforeSend, createSentryTrpcMiddleware, createTracesSampler, createTrpcSentryOnError, isBot, isSensitive, redact, scrubHeaders, setSentryUser, shouldReportTrpcError, withCronMonitor };

@@ -40,7 +40,7 @@ export interface SentryTrpcMiddlewareOptions {
    * Include the procedure input in the reported event. Defaults to `true` here
    * (the SDK default is `false`) — capturing the input is the main reason to
    * use the middleware over the `onError` path. Set `false` if inputs may carry
-   * PII the redaction layer doesn't cover.
+   * free-form PII the (key-name-based) redaction layer doesn't cover.
    */
   attachRpcInput?: boolean;
   /** Force a transaction (span) even when there's no active parent. */
@@ -48,14 +48,35 @@ export interface SentryTrpcMiddlewareOptions {
 }
 
 /**
+ * The argument shape the returned middleware receives — mirrors the SDK's
+ * `SentryTrpcMiddlewareArguments` so the generic `next()` return type flows
+ * through to tRPC's `middleware()` (which requires the callback to return a
+ * `Promise<MiddlewareResult>`; a flattened `unknown` would not type-check).
+ */
+export interface SentryTrpcMiddlewareArguments<T> {
+  path?: unknown;
+  type?: unknown;
+  next: () => T;
+  rawInput?: unknown;
+  getRawInput?: () => Promise<unknown>;
+}
+
+/** The SDK forces the callback to be async: `T` if already a promise, else `Promise<T>`. */
+export type SentryTrpcMiddlewareResult<T> = T extends Promise<unknown> ? T : Promise<T>;
+
+/** The middleware function `trpcMiddleware()` returns — pass to `t.middleware(...)`. */
+export type SentryTrpcMiddleware = <T>(
+  opts: SentryTrpcMiddlewareArguments<T>,
+) => SentryTrpcMiddlewareResult<T>;
+
+/**
  * Minimal structural shape of the SDK needed to build the middleware — satisfied
- * by `@sentry/nextjs`, `@sentry/node`, etc. `trpcMiddleware` returns a function
- * matching tRPC's middleware signature.
+ * by `@sentry/nextjs`, `@sentry/node`, etc. Kept faithful to the real
+ * `trpcMiddleware` signature so the wrapper's return type is identical to
+ * calling `Sentry.trpcMiddleware()` directly.
  */
 export interface SentryTrpcMiddlewareLike {
-  trpcMiddleware: (
-    options?: SentryTrpcMiddlewareOptions,
-  ) => (opts: unknown) => unknown;
+  trpcMiddleware: (options?: SentryTrpcMiddlewareOptions) => SentryTrpcMiddleware;
 }
 
 /**
@@ -63,12 +84,13 @@ export interface SentryTrpcMiddlewareLike {
  *
  * Defaults `attachRpcInput` to `true` so resolver throws are captured *with*
  * their input (the whole point of the middleware over the `onError` backstop).
- * Everything else is forwarded untouched.
+ * Everything else is forwarded untouched. The return type is exactly what
+ * `Sentry.trpcMiddleware()` returns, so it drops into `t.middleware()` unchanged.
  */
 export function createSentryTrpcMiddleware(
   Sentry: SentryTrpcMiddlewareLike,
   options: SentryTrpcMiddlewareOptions = {},
-): (opts: unknown) => unknown {
+): SentryTrpcMiddleware {
   const { attachRpcInput = true, ...rest } = options;
   return Sentry.trpcMiddleware({ attachRpcInput, ...rest });
 }

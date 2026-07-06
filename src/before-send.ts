@@ -19,12 +19,49 @@ export interface SentryEventLike {
   breadcrumbs?: { data?: unknown }[];
   extra?: Record<string, unknown>;
   contexts?: Record<string, unknown>;
+  exception?: {
+    values?: {
+      type?: string;
+      value?: string;
+      stacktrace?: { frames?: { filename?: string; abs_path?: string }[] };
+    }[];
+  };
+}
+
+/**
+ * Browser-extension URL scheme. Deliberately requires the `…-extension://`
+ * scheme (not a bare "extension" substring) so free-text errors like
+ * "Unsupported file extension: .xyz" are never dropped — the conservative rule
+ * is to keep any genuine user error.
+ */
+const EXTENSION_SCHEME = /(?:chrome|moz|safari(?:-web)?)-extension:\/\//i;
+
+/**
+ * True when any exception value/type or stacktrace frame points at a browser
+ * extension. Belt-and-suspenders behind SDK `denyUrls`: an extension error that
+ * is re-captured (e.g. via `captureConsoleIntegration`) can carry a synthesized
+ * stack whose TOP frame is the app's console call, so `denyUrls` never fires —
+ * but a deeper frame or the value still holds the `…-extension://` scheme.
+ */
+function hasBrowserExtensionException(event: SentryEventLike): boolean {
+  const values = event.exception?.values;
+  if (!values) return false;
+  return values.some((v) => {
+    if (EXTENSION_SCHEME.test(v.type ?? "") || EXTENSION_SCHEME.test(v.value ?? "")) {
+      return true;
+    }
+    return (v.stacktrace?.frames ?? []).some(
+      (f) => EXTENSION_SCHEME.test(f.filename ?? "") || EXTENSION_SCHEME.test(f.abs_path ?? ""),
+    );
+  });
 }
 
 export function createSentryBeforeSend<E extends SentryEventLike>(
   appName: string,
-): (event: E) => E {
-  return (event: E): E => {
+): (event: E) => E | null {
+  return (event: E): E | null => {
+    if (hasBrowserExtensionException(event)) return null;
+
     const seen = new WeakSet<object>();
 
     const next: E = {

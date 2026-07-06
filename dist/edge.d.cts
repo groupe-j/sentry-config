@@ -8,14 +8,14 @@
  *
  * Edge runtime has no Node APIs — no Prisma instrumentation, no profiling.
  */
-type InitSentryEdgeOptions = {
+interface InitSentryEdgeOptions {
     /** App name — tagged on every event. */
     app: string;
     /** Override the DSN (default: process.env.SENTRY_DSN). */
     dsn?: string;
     /** Extra error patterns to ignore. */
-    ignoreErrors?: Array<string | RegExp>;
-};
+    ignoreErrors?: (string | RegExp)[];
+}
 declare function initSentryEdge(opts: InitSentryEdgeOptions): void;
 
 export { type InitSentryEdgeOptions, initSentryEdge };

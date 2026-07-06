@@ -13,8 +13,9 @@ Shared Sentry configuration with battle-tested PII redaction. Extracted from `ri
 - **Init helpers** (`initSentryClient`, `initSentryServer`, `initSentryEdge`) — 3 lines per app instead of 40
 - **User context helper** (`setSentryUser`) for post-auth tagging with tenant/plan
 - **Bot detection** to filter crawler noise
-- **tRPC → Sentry capture** (`createTrpcSentryOnError`) — one tested `onError` for `fetchRequestHandler`, skips client faults, captures the underlying `cause`
+- **tRPC → Sentry capture** — two integration points: `createTrpcSentryOnError` (tested `onError` for `fetchRequestHandler`) and `createSentryTrpcMiddleware` (wraps the SDK's `trpcMiddleware`, captures resolver throws *with input* at the procedure layer)
 - **Arming guard** (`assertSentryArmed`) — fail loudly when a missing DSN turns Sentry into a silent no-op
+- **Next 16 + Turbopack safety** — peer range excludes the SDK window (#18871) that silently drops server events, plus an opt-in `transport` override on `initSentryServer` for any future transport swap
 - **Cycle-safe** PII walker (WeakSet guard against componentStack / Apollo error.cause loops)
 
 ## Install
@@ -153,6 +154,40 @@ The Sentry instance is injected, so the same helper works with `@sentry/nextjs`,
 `shouldReportTrpcError(code)` predicate is exported too if you need the
 client-vs-server decision elsewhere.
 
+### Capture tRPC errors at the resolver layer (recommended)
+
+The `onError` helper above hooks the Next.js route. If you own the `initTRPC`
+setup, prefer `createSentryTrpcMiddleware` — it wraps the SDK's built-in
+`Sentry.trpcMiddleware`, so it runs *inside* the tRPC call and can attach the
+procedure **input** to the event (plus open a span per procedure). This is
+Sentry's recommended integration point and removes the need for a hand-rolled
+`onError → captureException`.
+
+```ts
+// server/api/trpc.ts
+import * as Sentry from '@sentry/nextjs';
+import { initTRPC } from '@trpc/server';
+import { createSentryTrpcMiddleware } from '@groupe-j/sentry-config';
+
+const t = initTRPC.context<Context>().create();
+
+// attachRpcInput defaults to `true` here (the raw SDK default is `false`).
+const sentryMiddleware = t.middleware(createSentryTrpcMiddleware(Sentry));
+
+export const publicProcedure = t.procedure.use(sentryMiddleware);
+export const protectedProcedure = t.procedure.use(sentryMiddleware).use(auth);
+```
+
+Pass `{ attachRpcInput: false }` if procedure inputs may carry PII the redaction
+layer doesn't cover. The Sentry instance is injected, so any SDK exposing
+`trpcMiddleware` works.
+
+**Middleware vs `onError`:** use the middleware when you own the `initTRPC`
+setup (richer context: input + span); use `createTrpcSentryOnError` when you
+only own the Next.js route handler. Running both is harmless — the middleware
+captures with input and the `onError` acts as a backstop — but once you adopt
+the middleware you can usually drop the manual `onError` capture.
+
 ### Assert Sentry is actually armed
 
 A missing/empty DSN makes the SDK install a no-op client — the app looks healthy
@@ -172,6 +207,31 @@ assertSentryArmed(Sentry, {
 
 Returns `true` when a DSN is present; otherwise logs a loud `console.error` and
 returns `false` (or throws when `throwOnMissing` is set).
+
+### Next 16 + Turbopack blind spot (SDK #18871)
+
+Under **Next 16 + Turbopack**, `@sentry/nextjs` **v10.32–10.34** shipped a
+`makeNodeTransport` that calls `suppressTracing()` internally. That call breaks
+the OpenTelemetry async context and **silently drops server-side events** —
+`captureException` returns cleanly, the app looks healthy, and nothing reaches
+Sentry (the same class of blind spot as a missing DSN). See
+[getsentry/sentry-javascript#18871](https://github.com/getsentry/sentry-javascript/issues/18871).
+
+**You are already protected.** This package pins
+`@sentry/nextjs` to **`>=10.63.0 <11`**, so the affected 10.32–10.34 window is
+excluded by the peer constraint — you can't install into it through this
+package. The apps in this org run 10.63+.
+
+Two operational notes:
+
+- `assertSentryArmed` does **not** catch a transport that eats events (the
+  client is armed, the DSN is present). After any Next/Turbopack/SDK upgrade,
+  confirm a real test event actually lands in Sentry.
+- If a *future* SDK regression ever needs a different transport, `initSentryServer`
+  accepts an opt-in `transport` option that passes straight through to
+  `Sentry.init({ transport })`. Omit it (the default) and the SDK's own
+  transport is used — no behaviour change. It exists so you never have to fork
+  the init helper to swap a transport.
 
 ### Advanced: custom traces sampler
 

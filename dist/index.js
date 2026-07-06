@@ -255,6 +255,12 @@ function createTrpcSentryOnError(Sentry3) {
   };
 }
 
+// src/trpc-middleware.ts
+function createSentryTrpcMiddleware(Sentry3, options = {}) {
+  const { attachRpcInput = true, ...rest } = options;
+  return Sentry3.trpcMiddleware({ attachRpcInput, ...rest });
+}
+
 // src/armed.ts
 function assertSentryArmed(Sentry3, options = {}) {
   const { throwOnMissing = false } = options;
@@ -269,6 +275,6 @@ function assertSentryArmed(Sentry3, options = {}) {
   return false;
 }
 
-export { DEFAULT_DENY_URLS, DEFAULT_IGNORED_ERRORS, REDACTED, SENTRY_ENABLED, SENTRY_ENVIRONMENT, SENTRY_PROFILES_SAMPLE_RATE, SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE, SENTRY_REPLAYS_SESSION_SAMPLE_RATE, SENTRY_TRACES_SAMPLE_RATE, assertSentryArmed, clearSentryUser, createSentryBeforeSend, createTracesSampler, createTrpcSentryOnError, isBot, isSensitive, redact, scrubHeaders, setSentryUser, shouldReportTrpcError, withCronMonitor };
+export { DEFAULT_DENY_URLS, DEFAULT_IGNORED_ERRORS, REDACTED, SENTRY_ENABLED, SENTRY_ENVIRONMENT, SENTRY_PROFILES_SAMPLE_RATE, SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE, SENTRY_REPLAYS_SESSION_SAMPLE_RATE, SENTRY_TRACES_SAMPLE_RATE, assertSentryArmed, clearSentryUser, createSentryBeforeSend, createSentryTrpcMiddleware, createTracesSampler, createTrpcSentryOnError, isBot, isSensitive, redact, scrubHeaders, setSentryUser, shouldReportTrpcError, withCronMonitor };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

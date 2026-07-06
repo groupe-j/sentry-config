@@ -48,6 +48,22 @@ export type InitSentryServerOptions = {
    * for debugging (e.g. internal admin tools).
    */
   sendDefaultPii?: boolean;
+  /**
+   * Override the Sentry transport factory. Passed straight through to
+   * `Sentry.init({ transport })`; when omitted the SDK's own transport is used
+   * (no behaviour change — this is a rarely-needed escape hatch).
+   *
+   * The motivating case is getsentry/sentry-javascript#18871: under Next 16 +
+   * Turbopack, `makeNodeTransport` on SDK v10.32–10.34 calls `suppressTracing()`,
+   * which breaks the OpenTelemetry async context and silently drops server-side
+   * events. This package's peer range (`>=10.63.0`) already excludes that window,
+   * so you shouldn't hit it — but if a future SDK regression needs a different
+   * transport, supply one here without forking init.
+   *
+   * Typed `unknown` on purpose so this package needn't depend on the SDK's
+   * internal transport types; `Sentry.init` validates it at runtime.
+   */
+  transport?: unknown;
 };
 
 export function initSentryServer(opts: InitSentryServerOptions): void {
@@ -59,6 +75,7 @@ export function initSentryServer(opts: InitSentryServerOptions): void {
     ignoreErrors = [],
     extraIntegrations = [],
     sendDefaultPii = false,
+    transport,
   } = opts;
 
   const integrations: unknown[] = [];
@@ -113,5 +130,10 @@ export function initSentryServer(opts: InitSentryServerOptions): void {
     integrations: integrations as Parameters<typeof Sentry.init>[0]["integrations"],
     beforeSend: createSentryBeforeSend(app),
     _experiments: { enableLogs: true },
+    // Opt-in transport override (getsentry/sentry-javascript#18871). Only spread
+    // when provided so the SDK default is preserved for healthy setups.
+    ...(transport !== undefined
+      ? { transport: transport as Parameters<typeof Sentry.init>[0]["transport"] }
+      : {}),
   });
 }

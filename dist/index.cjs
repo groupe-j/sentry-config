@@ -277,6 +277,12 @@ function createTrpcSentryOnError(Sentry3) {
   };
 }
 
+// src/trpc-middleware.ts
+function createSentryTrpcMiddleware(Sentry3, options = {}) {
+  const { attachRpcInput = true, ...rest } = options;
+  return Sentry3.trpcMiddleware({ attachRpcInput, ...rest });
+}
+
 // src/armed.ts
 function assertSentryArmed(Sentry3, options = {}) {
   const { throwOnMissing = false } = options;
@@ -303,6 +309,7 @@ exports.SENTRY_TRACES_SAMPLE_RATE = SENTRY_TRACES_SAMPLE_RATE;
 exports.assertSentryArmed = assertSentryArmed;
 exports.clearSentryUser = clearSentryUser;
 exports.createSentryBeforeSend = createSentryBeforeSend;
+exports.createSentryTrpcMiddleware = createSentryTrpcMiddleware;
 exports.createTracesSampler = createTracesSampler;
 exports.createTrpcSentryOnError = createTrpcSentryOnError;
 exports.isBot = isBot;

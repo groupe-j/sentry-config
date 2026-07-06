@@ -8,7 +8,7 @@
  * Extend per-app via `ignoreErrors: [...DEFAULT_IGNORED_ERRORS, ...yourCustom]`.
  */
 
-export const DEFAULT_IGNORED_ERRORS: Array<string | RegExp> = [
+export const DEFAULT_IGNORED_ERRORS: (string | RegExp)[] = [
   // Next.js framework artifacts
   "NEXT_NOT_FOUND",
   "NEXT_REDIRECT",

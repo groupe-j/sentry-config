@@ -35,11 +35,11 @@ export const SENTRY_ENVIRONMENT =
 /**
  * Loose SamplingContext shape — matches @sentry/types without coupling.
  */
-type SamplingContextLike = {
+interface SamplingContextLike {
   name?: string;
   transactionContext?: { name?: string };
   request?: { url?: string };
-};
+}
 
 /**
  * Routes that are not worth tracing (waste of quota).

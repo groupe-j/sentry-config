@@ -10,16 +10,16 @@ import { redact, scrubHeaders } from "./redaction.js";
 
 // Loose Sentry event shape — typed locally to keep this package
 // independent from @sentry/* (consumer apps depend on @sentry/nextjs).
-export type SentryEventLike = {
+export interface SentryEventLike {
   tags?: Record<string, unknown>;
   request?: {
     data?: unknown;
     headers?: Record<string, string>;
   };
-  breadcrumbs?: Array<{ data?: unknown }>;
+  breadcrumbs?: { data?: unknown }[];
   extra?: Record<string, unknown>;
   contexts?: Record<string, unknown>;
-};
+}
 
 export function createSentryBeforeSend<E extends SentryEventLike>(
   appName: string,

@@ -77,7 +77,7 @@ export function isSensitive(key: string): boolean {
   return SENSITIVE_KEYS.has(normalised);
 }
 
-export function redact(value: unknown, seen: WeakSet<object> = new WeakSet()): unknown {
+export function redact(value: unknown, seen = new WeakSet<object>()): unknown {
   if (value === null || value === undefined) return value;
   if (typeof value !== "object") return value;
 

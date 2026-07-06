@@ -19,14 +19,14 @@ import {
   createTracesSampler,
 } from "./sampling.js";
 
-export type InitSentryEdgeOptions = {
+export interface InitSentryEdgeOptions {
   /** App name — tagged on every event. */
   app: string;
   /** Override the DSN (default: process.env.SENTRY_DSN). */
   dsn?: string;
   /** Extra error patterns to ignore. */
-  ignoreErrors?: Array<string | RegExp>;
-};
+  ignoreErrors?: (string | RegExp)[];
+}
 
 export function initSentryEdge(opts: InitSentryEdgeOptions): void {
   const { app, dsn, ignoreErrors = [] } = opts;

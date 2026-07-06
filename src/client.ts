@@ -23,7 +23,7 @@ import {
   createTracesSampler,
 } from "./sampling.js";
 
-export type InitSentryClientOptions = {
+export interface InitSentryClientOptions {
   /** App name — tagged on every event for multi-tenant dashboards. */
   app: string;
   /** Override the public DSN (default: process.env.NEXT_PUBLIC_SENTRY_DSN). */
@@ -31,7 +31,7 @@ export type InitSentryClientOptions = {
   /** Disable Sentry when this returns false (e.g. cookie consent gate). */
   enabled?: () => boolean;
   /** Extra error patterns to ignore (merged with DEFAULT_IGNORED_ERRORS). */
-  ignoreErrors?: Array<string | RegExp>;
+  ignoreErrors?: (string | RegExp)[];
   /** Disable Replay if you don't want session recording. */
   replay?: boolean;
   /** Mask all text in Replay (default true — safe). Set false only if no PII risk. */
@@ -48,7 +48,7 @@ export type InitSentryClientOptions = {
    * Set true only when you have explicit user consent and need the data.
    */
   sendDefaultPii?: boolean;
-};
+}
 
 export function initSentryClient(opts: InitSentryClientOptions): void {
   const {

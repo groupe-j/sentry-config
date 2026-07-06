@@ -20,6 +20,12 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+          # Writes a user-level .npmrc with the @groupe-j auth token. Required
+          # because pnpm ignores _authToken lines in the committed project
+          # .npmrc (security), so GitHub Packages deps like
+          # @groupe-j/eslint-config 401 without this. Mirrors publish.yml.
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@groupe-j"
 
       - name: Install
         run: pnpm install --frozen-lockfile

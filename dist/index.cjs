@@ -121,8 +121,22 @@ function scrubHeaders(headers) {
 }
 
 // src/before-send.ts
+var EXTENSION_SCHEME = /(?:chrome|moz|safari(?:-web)?)-extension:\/\//i;
+function hasBrowserExtensionException(event) {
+  const values = event.exception?.values;
+  if (!values) return false;
+  return values.some((v) => {
+    if (EXTENSION_SCHEME.test(v.type ?? "") || EXTENSION_SCHEME.test(v.value ?? "")) {
+      return true;
+    }
+    return (v.stacktrace?.frames ?? []).some(
+      (f) => EXTENSION_SCHEME.test(f.filename ?? "") || EXTENSION_SCHEME.test(f.abs_path ?? "")
+    );
+  });
+}
 function createSentryBeforeSend(appName) {
   return (event) => {
+    if (hasBrowserExtensionException(event)) return null;
     const seen = /* @__PURE__ */ new WeakSet();
     const next = {
       ...event,

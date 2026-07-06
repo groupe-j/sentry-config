@@ -5,19 +5,31 @@
  * (Replay, etc.) may read the event after `beforeSend` returns; mutation
  * would leak to them.
  */
-type SentryEventLike = {
+interface SentryEventLike {
     tags?: Record<string, unknown>;
     request?: {
         data?: unknown;
         headers?: Record<string, string>;
     };
-    breadcrumbs?: Array<{
+    breadcrumbs?: {
         data?: unknown;
-    }>;
+    }[];
     extra?: Record<string, unknown>;
     contexts?: Record<string, unknown>;
-};
-declare function createSentryBeforeSend<E extends SentryEventLike>(appName: string): (event: E) => E;
+    exception?: {
+        values?: {
+            type?: string;
+            value?: string;
+            stacktrace?: {
+                frames?: {
+                    filename?: string;
+                    abs_path?: string;
+                }[];
+            };
+        }[];
+    };
+}
+declare function createSentryBeforeSend<E extends SentryEventLike>(appName: string): (event: E) => E | null;
 
 /**
  * PII redaction by key-name (not regex on values).
@@ -69,7 +81,7 @@ declare const SENTRY_ENVIRONMENT: string;
 /**
  * Loose SamplingContext shape — matches @sentry/types without coupling.
  */
-type SamplingContextLike = {
+interface SamplingContextLike {
     name?: string;
     transactionContext?: {
         name?: string;
@@ -77,7 +89,7 @@ type SamplingContextLike = {
     request?: {
         url?: string;
     };
-};
+}
 /**
  * Builds a `tracesSampler` that returns 0 for low-value routes.
  * Pass to `Sentry.init({ tracesSampler: createTracesSampler(0.1) })`.
@@ -93,7 +105,7 @@ declare function createTracesSampler(defaultRate?: number): (ctx: SamplingContex
  *
  * Call `clearSentryUser` on logout.
  */
-type SentryUserContext = {
+interface SentryUserContext {
     /** Stable user identifier (DB id, NOT email). */
     id: string;
     /** Optional — only set if email is OK to send (consider PDPA/RGPD). */
@@ -102,7 +114,7 @@ type SentryUserContext = {
     tenant?: string;
     /** Plan tier (free/premium/enterprise) — useful for "is this a paying client?". */
     plan?: string;
-};
+}
 declare function setSentryUser(user: SentryUserContext): void;
 declare function clearSentryUser(): void;
 
@@ -124,7 +136,7 @@ declare function isBot(userAgent?: string | null): boolean;
  *
  * Extend per-app via `ignoreErrors: [...DEFAULT_IGNORED_ERRORS, ...yourCustom]`.
  */
-declare const DEFAULT_IGNORED_ERRORS: Array<string | RegExp>;
+declare const DEFAULT_IGNORED_ERRORS: (string | RegExp)[];
 declare const DEFAULT_DENY_URLS: RegExp[];
 
 /**
@@ -152,7 +164,7 @@ declare const DEFAULT_DENY_URLS: RegExp[];
  * The `monitorSlug` must be unique across all your projects' Sentry crons.
  * Recommend `<app>-<cron-name>` (e.g., `megahote-cleaning-finalize`).
  */
-type CronMonitorOptions = {
+interface CronMonitorOptions {
     /**
      * Crontab schedule string (e.g., '0 6 * * *' for 6am daily).
      * MUST match the Vercel cron schedule exactly — Sentry uses this to
@@ -183,7 +195,7 @@ type CronMonitorOptions = {
      * Default: 1.
      */
     recoveryThreshold?: number;
-};
+}
 /**
  * Wraps a Next.js route handler (typically a cron GET) with Sentry monitoring.
  *

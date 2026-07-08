@@ -1,24 +1,167 @@
 name: Dependabot auto-merge
-# Auto-merge des PRs Dependabot minor/patch quand la CI est verte.
-# Les MAJORS ne sont jamais auto-mergées (review humaine requise).
-# Distribué par @groupe-j/dev-conventions.
-on: pull_request
+# Auto-merge des PRs Dependabot minor/patch — mais UNIQUEMENT après une CI verte.
+#
+# Pourquoi deux jobs (label + merge) au lieu d'un simple `gh pr merge --auto` ?
+#   `gh pr merge --auto` ne fait QUE poser un flag « merge quand les required
+#   checks passent ». Sur un repo SANS branch protection (aucun required check),
+#   ce flag se résout IMMÉDIATEMENT → la PR est mergée sans attendre la CI, même
+#   si la CI est rouge. C'est ainsi que des bumps Dependabot cassés ont atteint
+#   la prod (GRO-625). Ce workflow est SELF-GATING : il ne dépend plus de la
+#   branch protection pour bloquer un merge sur CI rouge.
+#
+# Contrainte technique : `dependabot/fetch-metadata` (détection major/minor/patch)
+# EXIGE le contexte `pull_request` — il ne marche PAS en `workflow_run`
+# (dependabot/fetch-metadata#490). On sépare donc :
+#   - job `label`  (pull_request)  : détecte le semver et POSE un label sur les
+#     PRs minor/patch (jamais major). Les runs Dependabot respectent le bloc
+#     `permissions:` depuis 2021-10, donc pull-requests:write est bien accordé.
+#   - job `merge`  (workflow_run)  : se déclenche à la FIN du workflow « CI » et
+#     ne merge que si la CI a réussi ET que la PR porte le label. `workflow_run`
+#     tourne depuis la branche par défaut avec un token normal (inscriptible) —
+#     PAS le token read-only Dependabot — c'est l'échappatoire recommandée par
+#     GitHub pour les opérations privilégiées sur les PRs Dependabot.
+#
+# Les MAJORS ne reçoivent jamais le label → jamais auto-mergées (review humaine).
+#
+# Distribué par @groupe-j/dev-conventions (gjdc setup). Aucun prérequis de
+# branch protection ; le label `dependabot-auto-merge-ok` est créé
+# automatiquement (idempotent) par le job `label`.
+
+on:
+  pull_request:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+# Défaut minimal (lecture seule) ; chaque job élève ce dont il a besoin.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
+  pull-requests: read
+
+concurrency:
+  # Sérialise par PR/branche pour éviter deux tentatives de merge concurrentes.
+  group: dependabot-automerge-${{ github.event.pull_request.number || github.event.workflow_run.head_branch || github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  automerge:
+  # ── 1. Contexte pull_request : détecte le semver et étiquette minor/patch ──
+  label:
+    name: Label auto-mergeable Dependabot PRs
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.actor == 'dependabot[bot]'
     runs-on: ubuntu-latest
-    if: github.actor == 'dependabot[bot]'
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write # requis par `gh label create` (API labels = surface Issues)
     steps:
       - name: Fetch Dependabot metadata
         id: meta
         uses: dependabot/fetch-metadata@v2
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Enable auto-merge (minor + patch only)
-        if: steps.meta.outputs.update-type == 'version-update:semver-minor' || steps.meta.outputs.update-type == 'version-update:semver-patch'
-        run: gh pr merge --auto --squash "${PR_URL}"
+
+      - name: Ensure auto-merge label exists
+        if: >-
+          steps.meta.outputs.update-type == 'version-update:semver-minor' ||
+          steps.meta.outputs.update-type == 'version-update:semver-patch'
+        run: |
+          gh label create "$LABEL" \
+            --repo "$REPO" \
+            --color "0e8a16" \
+            --description "Dependabot minor/patch cleared for auto-merge once CI is green (GRO-625)" \
+            --force
+        env:
+          LABEL: dependabot-auto-merge-ok
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Label minor + patch (never major)
+        if: >-
+          steps.meta.outputs.update-type == 'version-update:semver-minor' ||
+          steps.meta.outputs.update-type == 'version-update:semver-patch'
+        run: gh pr edit "$PR_URL" --add-label "$LABEL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
+          LABEL: dependabot-auto-merge-ok
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── 2. Contexte workflow_run : merge SEULEMENT si la CI a réussi ──
+  merge:
+    name: Merge on green CI
+    # ⚠️ Ce job est APPAIRÉ au workflow CI distribué (workflows/ci.yml, `name: CI`),
+    # qui se déclenche sur `pull_request`. Le garde ci-dessous exige
+    # `workflow_run.event == 'pull_request'` : il évite de re-tourner sur la CI du
+    # push vers la branche par défaut consécutif au merge (pas de boucle), MAIS
+    # implique que la CI d'une PR Dependabot doit tourner en contexte
+    # `pull_request` (c'est le cas de notre ci.yml : `push` n'y écoute que
+    # main/staging, pas les branches dependabot/*). Si un repo renomme « CI » ou
+    # bascule sa CI de PR en `push`-only, ce merge ne se déclenchera jamais.
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Resolve PR, gate on author + label + tested SHA, then merge
+        run: |
+          set -euo pipefail
+
+          # Résout la ou les PR portant ce nom de branche head. On ne consomme
+          # QUE des champs de confiance renvoyés par l'API (numéro, auteur,
+          # labels, headRefOid) — jamais le titre ni le corps (contrôlés par la
+          # source → risque d'injection).
+          pr_json=$(gh pr list \
+            --repo "$REPO" \
+            --head "$HEAD_BRANCH" \
+            --state open \
+            --json number,author,labels,headRefOid)
+
+          # Sélectionne LA PR de Dependabot. Le `select` sur l'auteur sert de
+          # garde-auteur (ne merge jamais que les PRs de Dependabot lui-même) ET
+          # protège contre une PR de fork qui réutiliserait le même nom de
+          # branche pour se glisser en tête de liste.
+          entry=$(echo "$pr_json" | jq -c '[.[] | select(.author.login == "dependabot[bot]")] | .[0] // empty')
+          if [ -z "$entry" ]; then
+            echo "Aucune PR Dependabot ouverte pour la branche '$HEAD_BRANCH' — rien a merger."
+            exit 0
+          fi
+
+          number=$(echo "$entry" | jq -r '.number')
+          head_oid=$(echo "$entry" | jq -r '.headRefOid')
+          has_label=$(echo "$entry" | jq -r --arg L "$LABEL" 'any(.labels[]?; .name == $L)')
+
+          # Garde semver : le label n'est posé que sur minor/patch par le job
+          # `label`. Une major (ou une PR pas encore étiquetée) → pas de merge.
+          # (Résidu de confiance : quiconque a le write access peut poser ce
+          # label à la main — mais il pourrait aussi merger la PR à la main ;
+          # hors modèle de menace.)
+          if [ "$has_label" != "true" ]; then
+            echo "PR #$number : label '$LABEL' absent (major ou non etiquetee) — skip."
+            exit 0
+          fi
+
+          # Garde anti-stale (le cœur du fix GRO-625) : la CI a validé HEAD_SHA.
+          # Si Dependabot a rebase/force-push depuis (auto-rebase quand la base
+          # bouge), le head courant de la PR a changé → on NE merge PAS un commit
+          # non testé. La CI du nouveau head re-déclenchera ce workflow.
+          if [ "$head_oid" != "$HEAD_SHA" ]; then
+            echo "PR #$number : head '$head_oid' != commit teste par la CI '$HEAD_SHA' (rebase/force-push depuis la CI) — skip, la CI du nouveau head relancera."
+            exit 0
+          fi
+
+          echo "CI verte sur $HEAD_SHA + '$LABEL' + auteur Dependabot → merge de la PR #$number."
+          # --match-head-commit : garde atomique finale contre une course entre
+          # le check ci-dessus et l'appel merge (échoue proprement si le head
+          # bouge dans l'intervalle, plutôt que de merger un commit non testé).
+          gh pr merge "$number" --repo "$REPO" --squash --delete-branch --match-head-commit "$HEAD_SHA"
+        env:
+          REPO: ${{ github.repository }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          LABEL: dependabot-auto-merge-ok
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

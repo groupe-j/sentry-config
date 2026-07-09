@@ -7,7 +7,18 @@
  *
  * Why whole-word + normalization (not substring): substring would over-redact
  * `ipAddress`, `requestToken`, etc. Normalisation handles `id_card` ≡ `idCard`
- * ≡ `id-card` (all become `idcard` → match).
+ * ≡ `id-card` (all become `idcard` → match). Exact-key matching means broad
+ * entries stay narrow: `name` redacts a key literally named `name`, never
+ * `filename` / `hostname` / `username` / `appName`.
+ *
+ * Tradeoff — these three broad keys also match Sentry's own context fields:
+ * `name` → `contexts.{browser,os,device}.name` ("Chrome"/"Windows"); `description`
+ * → `contexts.trace.description` (span label, e.g. "GET /api/foo"); `location`
+ * → any library-set `location` in `extra`/breadcrumb data. All become `[REDACTED]`.
+ * Accepted, visible cost — in this lead-heavy portfolio these are high-risk PII
+ * fields, and the sibling `*.version`/`op`/`trace_id` context fields survive for
+ * debugging. Exception values/stack frames are never passed through `redact`, so
+ * error messages and filenames are unaffected.
  *
  * Why WeakSet cycle guard: Sentry events hold cycles via
  * `contexts.react.componentStack` or error.cause chains from Apollo/Prisma.
@@ -21,6 +32,7 @@ const SENSITIVE_KEYS = new Set([
   "emails",
   "phone",
   "phonenumber",
+  "name",
   "fullname",
   "firstname",
   "lastname",
@@ -28,6 +40,12 @@ const SENSITIVE_KEYS = new Set([
   "familyname",
   "dateofbirth",
   "dob",
+
+  // Lead / contact free-text (leads schema across portfolio apps —
+  // `name`/`location`/`description` carry a person's identity, home town,
+  // and self-description, so they are PII once attached to an event).
+  "location",
+  "description",
 
   // Government ID (Thailand, France, Luxembourg, EU)
   "passport",

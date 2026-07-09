@@ -27,6 +27,12 @@ jobs:
 
       - name: Install
         run: pnpm install --frozen-lockfile
+        env:
+          # Cross-repo GitHub Packages deps (e.g. @groupe-j/eslint-config) 401
+          # during install unless NODE_AUTH_TOKEN carries the org PAT. GITHUB_TOKEN
+          # is repo-scoped and can't read a sibling repo's package. Mirrors ci.yml.
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Typecheck
         run: pnpm typecheck

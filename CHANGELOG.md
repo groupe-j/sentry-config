@@ -3,6 +3,25 @@
 All notable changes to `@groupe-j/sentry-config` are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.6.1] - 2026-07-09
+
+### Changed
+
+- **Added `name`, `location`, `description` to `SENSITIVE_KEYS`** (PII redaction).
+  These are lead-schema fields used across portfolio apps; before this, attaching
+  a lead object to a Sentry event (`extra`, `contexts`, breadcrumbs, `request.data`)
+  leaked the person's name, home location, and free-text description in clear.
+  (M5, RGPD — audit finding from JELEMENT.)
+- Matching stays **exact-key** (normalised, whole-word), so `filename` /
+  `hostname` / `username` / `appName` are **not** over-redacted. Note: `name`
+  also matches Sentry's own `contexts.{browser,os,device}.name` — an accepted,
+  visible (`[REDACTED]`) cost documented in `src/redaction.ts`.
+- `firstName` / `lastName` / `phone` / `address` were already covered — no change.
+
+> Patch bump per semver policy: adding a sensitive key is strictly more
+> redaction, backward-compatible for consumers. Apps inherit it at their next
+> `@groupe-j/sentry-config` bump.
+
 ## [0.4.0] - 2026-07-01
 
 ### Changed

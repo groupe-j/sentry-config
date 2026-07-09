@@ -11,10 +11,14 @@
  * entries stay narrow: `name` redacts a key literally named `name`, never
  * `filename` / `hostname` / `username` / `appName`.
  *
- * Tradeoff on `name`: it also matches Sentry's own `contexts.{browser,os,device}.name`
- * (e.g. "Chrome", "Windows"), which become `[REDACTED]`. That is an accepted,
- * visible cost — in this portfolio `name` is a high-risk lead-PII field, and the
- * `*.version` context fields survive for debugging.
+ * Tradeoff — these three broad keys also match Sentry's own context fields:
+ * `name` → `contexts.{browser,os,device}.name` ("Chrome"/"Windows"); `description`
+ * → `contexts.trace.description` (span label, e.g. "GET /api/foo"); `location`
+ * → any library-set `location` in `extra`/breadcrumb data. All become `[REDACTED]`.
+ * Accepted, visible cost — in this lead-heavy portfolio these are high-risk PII
+ * fields, and the sibling `*.version`/`op`/`trace_id` context fields survive for
+ * debugging. Exception values/stack frames are never passed through `redact`, so
+ * error messages and filenames are unaffected.
  *
  * Why WeakSet cycle guard: Sentry events hold cycles via
  * `contexts.react.componentStack` or error.cause chains from Apollo/Prisma.

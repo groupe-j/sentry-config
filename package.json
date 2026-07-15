@@ -51,7 +51,7 @@
     }
   },
   "devDependencies": {
-    "@groupe-j/eslint-config": "^0.1.3",
+    "@groupe-j/eslint-config": "^0.2.1",
     "@sentry/nextjs": "^10.63.0",
     "@types/node": "^22.0.0",
     "eslint": "^9.20.0",

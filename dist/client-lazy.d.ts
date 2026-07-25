@@ -1,4 +1,4 @@
-import { I as InitSentryClientBaseOptions } from './client-core-Chixsrq_.js';
+import { I as InitSentryClientBaseOptions } from './client-core-DNcijrqR.js';
 
 /**
  * Browser-side Sentry init helper — **lazy Replay** entry point.
@@ -13,14 +13,15 @@ import { I as InitSentryClientBaseOptions } from './client-core-Chixsrq_.js';
  *
  * Nothing in this module — or in anything it imports — references
  * `Sentry.replayIntegration`. rrweb is therefore absent from your bundle
- * entirely; Replay is fetched from Sentry's CDN after first paint through the
+ * entirely; Replay is fetched from Sentry's CDN at the first idle after `load`,
+ * through the
  * SDK's own `lazyLoadIntegration`. Measured with esbuild (minified,
  * `@sentry/nextjs` 10.65, browser condition), initial chunk of a minimal app:
  *
- *   /client      (replay: true)  285.6 KB raw / 95.1 KB gzip   ← rrweb inside
- *   /client-lazy (replay: lazy)  163.2 KB raw / 56.0 KB gzip   ← rrweb absent
+ *   /client      (replay: true)  292.2 KB raw / 97.5 KB gzip   ← rrweb inside
+ *   /client-lazy (replay: lazy)  167.8 KB raw / 57.8 KB gzip   ← rrweb absent
  *   ------------------------------------------------------------------------
- *   saved                        122.4 KB raw / 39.1 KB gzip
+ *   saved                        124.4 KB raw / 39.7 KB gzip
  *
  * ## What it costs you — read before adopting
  *
@@ -39,8 +40,17 @@ import { I as InitSentryClientBaseOptions } from './client-core-Chixsrq_.js';
  *    it ahead of time), so you are trusting Sentry's CDN at runtime. Eager
  *    Replay ships the same code, but pinned by your lockfile and served from
  *    your own origin. Apps that cannot accept a third-party script at runtime
- *    should either self-host the bundle (`replayCdnBaseUrl`) or stay eager.
- * 4. **Boot-time errors have no run-up.** Replay's error mode records the
+ *    should either self-host the bundle (`replayCdnBaseUrl`, **origin only** —
+ *    any path you put there is discarded) or stay eager.
+ * 4. **The URL is pinned to the installed SDK version.** It resolves to
+ *    `<cdnBaseUrl>/<SDK_VERSION>/replay.min.js`. A dependency bump that outruns
+ *    the CDN — or a version whose bundle was never published — breaks Replay
+ *    everywhere at once, and a lazily-loaded feature that fails is invisible by
+ *    nature. That is the `sharp 0.35` failure class. On failure this module
+ *    sets the scope tag `replay.lazy: "failed"` so you can query for it in
+ *    Sentry instead of waiting to notice; it deliberately does **not** capture
+ *    an event of its own (house rule: one error = one capture).
+ * 5. **Boot-time errors have no run-up.** Replay's error mode records the
  *    seconds *preceding* an error from a rolling buffer that only exists once
  *    the integration is attached. Errors thrown before attach (roughly
  *    `init` → first paint) get no run-up. `replaysOnErrorSampleRate` stays at

@@ -110,17 +110,17 @@ export the same `initSentryClient`, so switching is a one-line import change.
 |--------|-----------------------------------|----------------|-----------------|
 | `…/client` (default, `replay: true`) | **bundled** | 10% prod | 100%, from init |
 | `…/client` with `replay: false` | ⚠️ **still bundled** | 0 | **0** |
-| `…/client-lazy` (default `replay: "lazy"`) | **absent** | 10% prod | 100%, from first paint |
+| `…/client-lazy` (default `replay: "lazy"`) | **absent** | 10% prod | 100%, from first idle after `load` |
 
 Measured with esbuild (minified, `@sentry/nextjs` 10.65, browser condition) on
 a minimal consumer:
 
 ```
-/client      replay:true    292.0 KB raw /  97.4 KB gz   rrweb IN
-/client      replay:false   292.0 KB raw /  97.4 KB gz   rrweb IN   ← the trap
-/client-lazy replay:"lazy"  167.7 KB raw /  57.7 KB gz   rrweb OUT
+/client      replay:true    292.2 KB raw /  97.5 KB gz   rrweb IN
+/client      replay:false   292.2 KB raw /  97.5 KB gz   rrweb IN   ← the trap
+/client-lazy replay:"lazy"  167.8 KB raw /  57.8 KB gz   rrweb OUT
 ------------------------------------------------------------------
-saved                       124.3 KB raw /  39.7 KB gz
+saved                       124.4 KB raw /  39.7 KB gz
 ```
 
 ```ts
@@ -141,8 +141,8 @@ weight is the price.
 #### What `/client-lazy` costs you
 
 It uses the SDK's own `lazyLoadIntegration`, which injects
-`<script src="https://browser.sentry-cdn.com/<version>/replay.min.js">` after
-first paint (or on the first captured error). That means:
+`<script src="https://browser.sentry-cdn.com/<version>/replay.min.js">` at the
+first idle after the `load` event (or on the first captured error). That means:
 
 1. **CSP** — `script-src` must allow that origin. Pass `replayScriptNonce` if
    you run `script-src 'nonce-…'`. If the app has a service worker
@@ -151,11 +151,19 @@ first paint (or on the first captured error). That means:
 2. **Content blockers** — `browser.sentry-cdn.com` is on common blocklists, and
    `tunnel` does **not** help (it tunnels *events*, not the script). On failure
    the page is unaffected and a breadcrumb explains why the next event has no
-   replay. Self-host with `replayCdnBaseUrl` if that matters to you.
+   replay. Self-host with `replayCdnBaseUrl` if that matters to you — note it
+   takes an **origin only**: the SDK resolves `/<version>/replay.min.js` from
+   the root, so any path you pass is discarded.
 3. **No SRI** — the SDK cannot know the hash ahead of time, so the tag carries
    `crossorigin="anonymous"` but no `integrity`. Eager Replay ships the same
    code pinned by your lockfile instead.
-4. **Boot-time errors have no run-up** — Replay records the seconds *preceding*
+4. **The URL is pinned to the installed SDK version** (`<cdnBaseUrl>/<SDK_VERSION>/replay.min.js`).
+   A dependency bump that outruns the CDN breaks Replay everywhere at once, and
+   a lazy feature that fails is invisible by nature — the `sharp 0.35` failure
+   class. On failure the scope tag `replay.lazy: "failed"` is set so you can
+   **query** for it in Sentry; no extra event is captured (house rule: one error
+   = one capture).
+5. **Boot-time errors have no run-up** — Replay records the seconds *preceding*
    an error from a rolling buffer that only exists once the integration is
    attached. `replaysOnErrorSampleRate` stays at `1.0` and is honest for every
    error after attach (the overwhelming majority); errors thrown in the

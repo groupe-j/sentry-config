@@ -15,10 +15,10 @@ This project follows [Semantic Versioning](https://semver.org/).
   esbuild (minified, `@sentry/nextjs` 10.65, browser condition):
 
   ```
-  /client      replay:true    292.0 KB raw /  97.4 KB gz   rrweb IN
-  /client      replay:false   292.0 KB raw /  97.4 KB gz   rrweb IN   (the trap)
-  /client-lazy replay:"lazy"  167.7 KB raw /  57.7 KB gz   rrweb OUT
-  saved                       124.3 KB raw /  39.7 KB gz
+  /client      replay:true    292.2 KB raw /  97.5 KB gz   rrweb IN
+  /client      replay:false   292.2 KB raw /  97.5 KB gz   rrweb IN   (the trap)
+  /client-lazy replay:"lazy"  167.8 KB raw /  57.8 KB gz   rrweb OUT
+  saved                       124.4 KB raw /  39.7 KB gz
   ```
 
   `replaysSessionSampleRate` / `replaysOnErrorSampleRate` are **unchanged**
@@ -28,14 +28,26 @@ This project follows [Semantic Versioning](https://semver.org/).
   integration is attached, so an error thrown in the `[init → first paint]`
   window gets no run-up. Keep `/client` + `replay: true` for boot-time errors.
 
-  New options for this path: `replayCdnBaseUrl` (self-host the bundle) and
+  On a failed CDN load the page is unaffected: a breadcrumb is added and the
+  scope tag `replay.lazy: "failed"` is set so the failure is **queryable**
+  (the URL is pinned to the installed SDK version, so a bump that outruns the
+  CDN would otherwise break Replay portfolio-wide in silence — the `sharp 0.35`
+  failure class). No extra event is captured: one error = one capture. A failed
+  attempt also releases the guard so the later trigger can still succeed, capped
+  at 2 attempts.
+
+  New options for this path: `replayCdnBaseUrl` (self-host the bundle, **origin
+  only** — the SDK resolves `/<version>/replay.min.js` from the root, so any
+  path is discarded) and
   `replayScriptNonce` (strict `script-src 'nonce-…'` CSP). **Adopting it
   requires allowing `browser.sentry-cdn.com` in `script-src`** — and in
   `connect-src` too if the app has a service worker.
 
 - **`SENTRY_WEBVITAL_SAMPLE_RATE`** (default `1.0`, env override
   `NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE`) and a second argument on
-  `createTracesSampler(defaultRate, webVitalRate)`.
+  `createTracesSampler(defaultRate, webVitalRate)`. A declared-but-**empty** env
+  var falls back to the default rather than parsing as `0` — `Number("")` is
+  `0`, which would have silently re-created the very bug below.
 
 ### Fixed
 
@@ -50,9 +62,12 @@ This project follows [Semantic Versioning](https://semver.org/).
      interaction whose deepest CSS class ends in `.map` / `.css` / `.js` was
      dropped outright — a live hazard on our map-heavy apps.
 
-  Web-vital spans are now matched first (by `sentry.origin`
-  `auto.http.browser.*` / `sentry.op` `ui.interaction.*`) and sampled at
-  `SENTRY_WEBVITAL_SAMPLE_RATE`.
+  Web-vital spans are now matched first — by an **allowlist** of the three
+  standalone origins (`auto.http.browser.{inp,cls,lcp}`) plus the
+  `ui.interaction.*` op — and sampled at `SENTRY_WEBVITAL_SAMPLE_RATE`. The
+  allowlist is deliberate: a `auto.http.browser.` *prefix* test would also catch
+  `auto.http.browser.stream` (`FetchStreamPerformance`) and sample all
+  SSE/streaming traffic at 100%.
   ⚠️ **Quota**: this adds at most one span per page that had an interaction.
   Dial it down per app with `NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE`.
 - `browserTracingIntegration({ enableInp: true })` is now passed **explicitly**

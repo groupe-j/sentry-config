@@ -183,14 +183,18 @@ var SENTRY_WEBVITAL_SAMPLE_RATE = parseRate(
   1
 );
 function parseRate(raw, fallback) {
-  if (raw === void 0) return fallback;
+  if (raw === void 0 || raw.trim() === "") return fallback;
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : fallback;
 }
-var WEB_VITAL_ORIGIN_PREFIX = "auto.http.browser.";
+var WEB_VITAL_ORIGINS = /* @__PURE__ */ new Set([
+  "auto.http.browser.inp",
+  "auto.http.browser.cls",
+  "auto.http.browser.lcp"
+]);
 function isWebVitalSpan(ctx) {
   const origin = ctx.attributes?.["sentry.origin"];
-  if (typeof origin === "string" && origin.startsWith(WEB_VITAL_ORIGIN_PREFIX)) return true;
+  if (typeof origin === "string" && WEB_VITAL_ORIGINS.has(origin)) return true;
   const op = ctx.attributes?.["sentry.op"];
   return typeof op === "string" && op.startsWith("ui.interaction.");
 }

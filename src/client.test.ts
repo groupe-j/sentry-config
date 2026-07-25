@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const initMock = vi.fn();
 const addIntegrationMock = vi.fn();
 const addBreadcrumbMock = vi.fn();
+const setTagMock = vi.fn();
 const replayIntegrationMock = vi.fn((opts: unknown) => ({ name: "Replay", opts }));
 const browserTracingIntegrationMock = vi.fn((opts: unknown) => ({
   name: "BrowserTracing",
@@ -32,6 +33,9 @@ vi.mock("@sentry/nextjs", () => ({
   },
   addBreadcrumb: (...args: unknown[]): void => {
     addBreadcrumbMock(...args);
+  },
+  setTag: (...args: unknown[]): void => {
+    setTagMock(...args);
   },
   replayIntegration: (opts: unknown): unknown => replayIntegrationMock(opts),
   browserTracingIntegration: (opts: unknown): unknown => browserTracingIntegrationMock(opts),
@@ -100,6 +104,7 @@ beforeEach(() => {
   initMock.mockClear();
   addIntegrationMock.mockClear();
   addBreadcrumbMock.mockClear();
+  setTagMock.mockClear();
   replayIntegrationMock.mockClear();
   browserTracingIntegrationMock.mockClear();
   lazyLoadIntegrationMock.mockClear();
@@ -274,6 +279,52 @@ describe("/client-lazy — lazy entry point", () => {
       level: "warning",
     });
     expect(addIntegrationMock).not.toHaveBeenCalled();
+    // Queryable signal, so a portfolio-wide CDN/version breakage is findable
+    // without waiting for an unrelated error to carry the breadcrumb.
+    expect(setTagMock).toHaveBeenCalledWith("replay.lazy", "failed");
+  });
+
+  it("retries on the idle trigger after the error-triggered attempt failed", async () => {
+    // The error trigger can fire during boot on a congested network. Burning
+    // the single chance there would kill the idle attempt that would have won.
+    let calls = 0;
+    lazyLoadResult = () => {
+      calls += 1;
+      return calls === 1
+        ? Promise.reject(new Error("transient"))
+        : Promise.resolve((opts: unknown) => replayIntegrationMock(opts));
+    };
+    const { fireLoad } = stubBrowser({ idle: true });
+    const { initSentryClient } = await loadLazy();
+    initSentryClient({ app: "probe" });
+
+    clientHooks.beforeSendEvent?.({ exception: { values: [] } });
+    await vi.waitFor(() => expect(addBreadcrumbMock).toHaveBeenCalledTimes(1));
+    expect(addIntegrationMock).not.toHaveBeenCalled();
+
+    fireLoad();
+    await vi.waitFor(() => expect(addIntegrationMock).toHaveBeenCalledTimes(1));
+  });
+
+  it("gives up after the retry cap rather than hammering the CDN", async () => {
+    lazyLoadResult = () => Promise.reject(new Error("blocked"));
+    const { fireLoad } = stubBrowser({ idle: true });
+    const { initSentryClient } = await loadLazy();
+    initSentryClient({ app: "probe" });
+
+    // Wait for each failure to SETTLE before firing the next trigger —
+    // otherwise the in-flight guard, not the cap, is what stops the call.
+    clientHooks.beforeSendEvent?.({ exception: { values: [] } });
+    await vi.waitFor(() => expect(addBreadcrumbMock).toHaveBeenCalledTimes(1));
+
+    fireLoad();
+    await vi.waitFor(() => expect(addBreadcrumbMock).toHaveBeenCalledTimes(2));
+    expect(lazyLoadIntegrationMock).toHaveBeenCalledTimes(2);
+
+    // Cap reached: a third trigger must not fetch again.
+    clientHooks.beforeSendEvent?.({ exception: { values: [] } });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(lazyLoadIntegrationMock).toHaveBeenCalledTimes(2);
   });
 
   it("replay: false disables replay entirely and fetches nothing", async () => {
@@ -304,21 +355,55 @@ describe("/client-lazy — lazy entry point", () => {
  */
 describe("bundle-size invariant — client-lazy must never reference replayIntegration", () => {
   const here = path.dirname(fileURLToPath(import.meta.url));
-  const read = (f: string): string => readFileSync(path.join(here, f), "utf8");
   /** Strip comments and doc blocks: prose may legitimately name the API. */
   const code = (f: string): string =>
-    read(f)
+    readFileSync(path.join(here, f), "utf8")
       .replace(/\/\*[\s\S]*?\*\//g, "")
       .replace(/^\s*\/\/.*$/gm, "");
 
-  it("client-lazy.ts does not import client.ts", () => {
-    expect(code("client-lazy.ts")).not.toMatch(/from\s+["']\.\/client\.js["']/);
+  /**
+   * Walks the whole local import graph from an entry, so a NEW module that
+   * leaks Replay is caught too — checking only the two files we happen to know
+   * about today would rot the moment someone adds a third.
+   */
+  function localGraph(entry: string): string[] {
+    const seen = new Set<string>();
+    const walk = (f: string): void => {
+      if (seen.has(f)) return;
+      seen.add(f);
+      const src = code(f);
+      // Static `from "./x.js"` and dynamic `import("./x.js")` alike: both keep
+      // the target reachable, and reachability is what pins the bytes.
+      for (const m of src.matchAll(/from\s*["']\.\/([^"']+)\.js["']/g)) walk(`${m[1]}.ts`);
+      for (const m of src.matchAll(/import\(\s*["']\.\/([^"']+)\.js["']\s*\)/g)) walk(`${m[1]}.ts`);
+    };
+    walk(entry);
+    return [...seen];
+  }
+
+  it("reaches the modules we expect (guards the walker itself)", () => {
+    const graph = localGraph("client-lazy.ts");
+    expect(graph).toContain("client-core.ts");
+    expect(graph).toContain("sampling.ts");
+    expect(graph).toContain("before-send.ts");
+    expect(graph).not.toContain("client.ts");
   });
 
-  it("neither client-lazy.ts nor client-core.ts accesses Sentry.replayIntegration", () => {
-    for (const f of ["client-lazy.ts", "client-core.ts"]) {
-      expect(code(f), `${f} must not reference Sentry.replayIntegration`).not.toMatch(
+  it("no module reachable from client-lazy.ts touches replayIntegration", () => {
+    for (const f of localGraph("client-lazy.ts")) {
+      const src = code(f);
+      // Member access, destructuring and computed access all pin the bytes.
+      expect(src, `${f}: Sentry.replayIntegration member access`).not.toMatch(
         /Sentry\s*\.\s*replayIntegration/,
+      );
+      expect(src, `${f}: computed access to replayIntegration`).not.toMatch(
+        /\[\s*["']replayIntegration["']\s*\]/,
+      );
+      expect(src, `${f}: replayIntegration destructured off the SDK`).not.toMatch(
+        /\{[^}]*\breplayIntegration\b[^}]*\}\s*=/,
+      );
+      expect(src, `${f}: replayIntegration imported by name`).not.toMatch(
+        /import\s*\{[^}]*\breplayIntegration\b[^}]*\}\s*from/,
       );
     }
   });

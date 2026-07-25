@@ -53,7 +53,12 @@ export const SENTRY_WEBVITAL_SAMPLE_RATE = parseRate(
 );
 
 function parseRate(raw: string | undefined, fallback: number): number {
-  if (raw === undefined) return fallback;
+  // A declared-but-empty env var is the common Vercel accident, and `Number("")`
+  // is `0` — which is a perfectly valid rate. Left unguarded, an empty
+  // NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE would silently set the rate to 0 and
+  // re-create the exact "INP is empty everywhere" bug this module exists to fix.
+  // Blank means "unset".
+  if (raw === undefined || raw.trim() === "") return fallback;
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : fallback;
 }
@@ -70,14 +75,28 @@ interface SamplingContextLike {
 }
 
 /**
- * Standalone web-vital spans carry `sentry.origin = auto.http.browser.<vital>`
- * (`inp`, and `cls`/`lcp` when standalone web-vital spans are enabled).
+ * Standalone web-vital spans carry `sentry.origin = auto.http.browser.<vital>`.
+ *
+ * ⚠️ Deliberately an **allowlist**, not a `auto.http.browser.` prefix test.
+ * `FetchStreamPerformance` tags its spans `auto.http.browser.stream`, and those
+ * become root spans (so they reach this sampler) whenever no idle span is
+ * active — i.e. any SSE / streaming request a second after pageload. A prefix
+ * test would sample that traffic at the web-vital rate (100%) instead of the
+ * traces rate. These three are the only web-vital origins the SDK emits
+ * (`browser-utils/metrics/{inp,cls,lcp}.js`).
  */
-const WEB_VITAL_ORIGIN_PREFIX = "auto.http.browser.";
+const WEB_VITAL_ORIGINS = new Set([
+  "auto.http.browser.inp",
+  "auto.http.browser.cls",
+  "auto.http.browser.lcp",
+]);
 
 function isWebVitalSpan(ctx: SamplingContextLike): boolean {
   const origin = ctx.attributes?.["sentry.origin"];
-  if (typeof origin === "string" && origin.startsWith(WEB_VITAL_ORIGIN_PREFIX)) return true;
+  if (typeof origin === "string" && WEB_VITAL_ORIGINS.has(origin)) return true;
+  // Fallback for INP specifically: its op is `ui.interaction.<type>`. The only
+  // other `ui.interaction.*` producer creates *child* spans of the pageload
+  // transaction, which never reach a sampler.
   const op = ctx.attributes?.["sentry.op"];
   return typeof op === "string" && op.startsWith("ui.interaction.");
 }

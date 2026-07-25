@@ -255,10 +255,10 @@ l'algorithme de chunking du consommateur. Elle vit sur une **entrée séparée**
 `Sentry.replayIntegration` :
 
 ```
-/client      replay:true    292.0 KB raw /  97.4 KB gz   rrweb IN
-/client      replay:false   292.0 KB raw /  97.4 KB gz   rrweb IN   ← le piège
-/client-lazy replay:"lazy"  167.7 KB raw /  57.7 KB gz   rrweb OUT
-gain                        124.3 KB raw /  39.7 KB gz
+/client      replay:true    292.2 KB raw /  97.5 KB gz   rrweb IN
+/client      replay:false   292.2 KB raw /  97.5 KB gz   rrweb IN   ← le piège
+/client-lazy replay:"lazy"  167.8 KB raw /  57.8 KB gz   rrweb OUT
+gain                        124.4 KB raw /  39.7 KB gz
 ```
 
 **Pourquoi une 2e entrée plutôt qu'un mode runtime sur `/client`** : parce que la
@@ -285,10 +285,19 @@ pour auto-héberger, `replayScriptNonce` pour les CSP à nonce, ou rester sur
 `/client`.
 
 **Conséquences si renversé** : un seul accès `Sentry.replayIntegration` dans
-`client-core.ts` ou `client-lazy.ts` ré-attache rrweb au chunk initial et annule
-tout le gain — **sans qu'aucun test de comportement ne casse**. C'est pour ça que
-`src/client.test.ts` contient un test d'invariant qui lit le texte source des deux
-modules. Ne le supprime pas.
+n'importe quel module atteignable depuis `client-lazy.ts` ré-attache rrweb au
+chunk initial et annule tout le gain — **sans qu'aucun test de comportement ne
+casse**. C'est pour ça que `src/client.test.ts` contient un test d'invariant qui
+parcourt le **graphe d'imports local** depuis `client-lazy.ts` et vérifie sur le
+texte source qu'aucun module n'y touche (accès membre, accès calculé,
+déstructuration, import nommé). Ne le supprime pas.
+
+Portée honnête de ce garde-fou : il travaille sur le texte source, pas sur un
+bundle. Il attrape le cas réaliste (quelqu'un ajoute un module ou un import) mais
+pas une exfiltration exotique via alias indirect. Le vrai filet serait de bundler
+`client-lazy.ts` dans le test et d'assertion l'absence de marqueur rrweb dans la
+sortie ; c'est plus lourd (dépendance esbuild explicite en test) et ça n'a pas été
+fait — à faire si le garde-fou textuel se révèle insuffisant.
 
 ---
 

@@ -1,4 +1,4 @@
-import { I as InitSentryClientBaseOptions, R as ReplayMode } from './client-core-Chixsrq_.cjs';
+import { I as InitSentryClientBaseOptions, R as ReplayMode } from './client-core-DNcijrqR.cjs';
 
 /**
  * Browser-side Sentry init helper — **eager Replay** entry point.

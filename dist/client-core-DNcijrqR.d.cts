@@ -8,8 +8,8 @@
  * `client-lazy.ts` ship without those bytes. Measured (esbuild, minified,
  * `@sentry/nextjs` 10.65, browser condition):
  *
- *   init + browserTracing, no replay reference : 161.3 KB raw /  55.3 KB gzip
- *   init + browserTracing + replayIntegration  : 285.6 KB raw /  95.1 KB gzip
+ *   /client-lazy (no replay reference) : 167.8 KB raw / 57.8 KB gzip
+ *   /client      (replay: true)        : 292.2 KB raw / 97.5 KB gzip
  *
  * See `DECISIONS.md` for why a dynamic `import()` of a local module does NOT
  * achieve this and `lazyLoadIntegration` does.
@@ -65,6 +65,13 @@ interface InitSentryClientBaseOptions {
      * public CDN (`https://browser.sentry-cdn.com`). Point it at your own origin
      * if your CSP or your ad-blocker tolerance requires it. Ignored when Replay
      * is eager.
+     *
+     * ⚠️ **Origin only — any path is discarded.** The SDK resolves
+     * `new URL("/<version>/replay.min.js", baseURL)`, and the leading slash makes
+     * that origin-absolute: `https://cdn.example.com/sentry` fetches
+     * `https://cdn.example.com/<version>/replay.min.js`, *not*
+     * `…/sentry/<version>/…`. Serve the bundle at the root of whatever origin you
+     * point this at, or you get a 404 and no Replay.
      */
     replayCdnBaseUrl?: string;
     /**

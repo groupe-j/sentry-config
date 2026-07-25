@@ -8,8 +8,8 @@
  * `client-lazy.ts` ship without those bytes. Measured (esbuild, minified,
  * `@sentry/nextjs` 10.65, browser condition):
  *
- *   init + browserTracing, no replay reference : 161.3 KB raw /  55.3 KB gzip
- *   init + browserTracing + replayIntegration  : 285.6 KB raw /  95.1 KB gzip
+ *   /client-lazy (no replay reference) : 167.8 KB raw / 57.8 KB gzip
+ *   /client      (replay: true)        : 292.2 KB raw / 97.5 KB gzip
  *
  * See `DECISIONS.md` for why a dynamic `import()` of a local module does NOT
  * achieve this and `lazyLoadIntegration` does.
@@ -78,6 +78,13 @@ export interface InitSentryClientBaseOptions {
    * public CDN (`https://browser.sentry-cdn.com`). Point it at your own origin
    * if your CSP or your ad-blocker tolerance requires it. Ignored when Replay
    * is eager.
+   *
+   * ⚠️ **Origin only — any path is discarded.** The SDK resolves
+   * `new URL("/<version>/replay.min.js", baseURL)`, and the leading slash makes
+   * that origin-absolute: `https://cdn.example.com/sentry` fetches
+   * `https://cdn.example.com/<version>/replay.min.js`, *not*
+   * `…/sentry/<version>/…`. Serve the bundle at the root of whatever origin you
+   * point this at, or you get a 404 and no Replay.
    */
   replayCdnBaseUrl?: string;
   /**
@@ -202,28 +209,49 @@ export function initClientCore({ options, replay, eagerReplay }: InitClientCoreP
 function scheduleLazyReplay(tuning: ReplayTuning, scriptNonce?: string): void {
   if (typeof window === "undefined" || typeof document === "undefined") return;
 
-  let requested = false;
+  // Two triggers race for one attach. `pending` guards against a double fetch;
+  // `attempts` caps the retries. A *failed* attempt releases the guard so the
+  // later trigger can still succeed: the error trigger can fire during boot on a
+  // congested network, and burning the single chance there would kill the
+  // idle-after-`load` attempt that would have worked.
+  const MAX_ATTEMPTS = 2;
+  let pending = false;
+  let attempts = 0;
+  let attached = false;
+
   const attach = (): void => {
-    if (requested) return;
-    requested = true;
+    if (pending || attached || attempts >= MAX_ATTEMPTS) return;
+    pending = true;
+    attempts += 1;
     // `lazyLoadIntegration` injects `<script src="<cdnBaseUrl>/<version>/replay.min.js">`
     // and resolves with the integration factory. Nothing about Replay is in our
     // bundle — that is the whole point of this module.
     Sentry.lazyLoadIntegration("replayIntegration", scriptNonce)
       .then((replayIntegration) => {
+        attached = true;
+        pending = false;
         Sentry.addIntegration(replayIntegration(tuning));
       })
       .catch(() => {
+        pending = false;
         // Never break the app because session recording failed to load (a
         // content blocker refusing browser.sentry-cdn.com is the common case),
-        // and never turn this into a second capture path. A breadcrumb is
-        // enough: it rides along with the next real error, where it is
-        // actionable — it tells you why that event has no replay.
+        // and never turn this into a second capture path — no captureException,
+        // no captureMessage. Two passive signals instead:
+        //  - a breadcrumb, which rides along with the next real event and tells
+        //    you why that event has no replay;
+        //  - a scope tag, so the failure is *queryable* in Sentry
+        //    (`replay.lazy:failed`) rather than only readable one event at a
+        //    time. That matters because the CDN URL is pinned to the installed
+        //    SDK version: a dependency bump that outruns the CDN would break
+        //    Replay portfolio-wide, and a breadcrumb alone only surfaces when
+        //    some unrelated error happens to occur on the same page.
         Sentry.addBreadcrumb({
           category: "sentry.replay",
           level: "warning",
           message: "lazy Replay bundle failed to load — no session replay for this page",
         });
+        Sentry.setTag("replay.lazy", "failed");
       });
   };
 

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTracesSampler } from "./sampling.js";
 
 describe("createTracesSampler", () => {
@@ -50,6 +50,71 @@ describe("createTracesSampler", () => {
   it("honours a custom web-vital rate", () => {
     const dialedDown = createTracesSampler(0.1, 0.25);
     expect(dialedDown({ attributes: { "sentry.origin": "auto.http.browser.inp" } })).toBe(0.25);
+  });
+
+  it("does NOT treat fetch-stream spans as web vitals", () => {
+    // FetchStreamPerformance tags spans `auto.http.browser.stream` and they can
+    // become root spans. A `auto.http.browser.` PREFIX test would sample all
+    // SSE/streaming traffic at the web-vital rate (100%) instead of 10%.
+    expect(
+      sampler({
+        name: "GET /api/chat",
+        attributes: {
+          "sentry.origin": "auto.http.browser.stream",
+          "sentry.op": "http.client.stream",
+        },
+      }),
+    ).toBe(0.1);
+  });
+
+  it("does not treat ordinary pageload/navigation spans as web vitals", () => {
+    expect(
+      sampler({ name: "/vehicles", attributes: { "sentry.origin": "auto.pageload.browser" } }),
+    ).toBe(0.1);
+    expect(
+      sampler({ name: "/vehicles", attributes: { "sentry.origin": "auto.navigation.browser" } }),
+    ).toBe(0.1);
+  });
+
+  it("accepts the cls and lcp standalone origins too", () => {
+    for (const origin of ["auto.http.browser.cls", "auto.http.browser.lcp"]) {
+      expect(sampler({ attributes: { "sentry.origin": origin } })).toBe(1.0);
+    }
+  });
+});
+
+describe("web-vital rate parsing (parseRate)", () => {
+  async function rateFor(raw: string | undefined): Promise<number> {
+    vi.resetModules();
+    if (raw === undefined) vi.stubEnv("NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE", "");
+    else vi.stubEnv("NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE", raw);
+    const mod = await import("./sampling.js");
+    return mod.SENTRY_WEBVITAL_SAMPLE_RATE;
+  }
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it("falls back to 1.0 for a declared-but-EMPTY env var", async () => {
+    // Number("") === 0, a valid rate — left unguarded this silently re-creates
+    // the "INP is empty everywhere" bug the web-vital rate exists to fix.
+    expect(await rateFor("")).toBe(1.0);
+    expect(await rateFor("   ")).toBe(1.0);
+  });
+
+  it("falls back to 1.0 for garbage and out-of-range values", async () => {
+    for (const raw of ["abc", "2", "-1", "NaN", "Infinity"]) {
+      expect(await rateFor(raw), `raw=${JSON.stringify(raw)}`).toBe(1.0);
+    }
+  });
+
+  it("accepts a real explicit rate, including an explicit 0", async () => {
+    expect(await rateFor("0.25")).toBe(0.25);
+    expect(await rateFor("1")).toBe(1);
+    // An explicit "0" is a deliberate opt-out and must be honoured.
+    expect(await rateFor("0")).toBe(0);
   });
 });
 

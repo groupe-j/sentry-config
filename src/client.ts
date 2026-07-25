@@ -1,92 +1,72 @@
 /**
- * Browser-side Sentry init helper.
+ * Browser-side Sentry init helper — **eager Replay** entry point.
  *
- * Usage in `sentry.client.config.ts`:
+ * Usage in `instrumentation-client.ts` (Next 15+) or `sentry.client.config.ts`:
  *
  *   import { initSentryClient } from '@groupe-j/sentry-config/client';
  *   initSentryClient({ app: 'mega-hote' });
  *
+ * ⚠️ **Next 16 / Turbopack.** `sentry.client.config.ts` is only injected by the
+ * *webpack* path of `@sentry/nextjs`. A Next 16 app built with Turbopack never
+ * executes it, so `initSentryClient` never runs and the browser SDK reports
+ * nothing — silently. On Next ≥ 15 always put this call in
+ * **`instrumentation-client.ts`** at the project root.
+ *
  * For PDPA / consent gating (ridesamui pattern), pass an `enabled` predicate:
  *
  *   initSentryClient({ app: 'web', enabled: () => hasUserConsent() });
+ *
+ * ⚠️ `enabled` is evaluated ONCE, at init time. If the predicate reads a
+ * consent cookie that the user only accepts later in the session, Sentry stays
+ * off for the whole page — no errors, no pageload transactions. That is a
+ * legitimate design (privacy first), but such an app reports nothing until the
+ * visitor has consented AND loaded a new document.
+ *
+ * 📦 **Bundle size.** This module references `Sentry.replayIntegration`
+ * statically, which pins ~124 KB raw / ~39 KB gzip of rrweb into your initial
+ * chunk **on every page, whatever `replay` is set to** — `replay: false`
+ * included (see the trap on {@link ReplayMode}). To get those bytes out, import
+ * from `@groupe-j/sentry-config/client-lazy` instead; the API is the same.
  */
 
 import * as Sentry from "@sentry/nextjs";
-import { createSentryBeforeSend } from "./before-send.js";
-import { DEFAULT_DENY_URLS, DEFAULT_IGNORED_ERRORS } from "./ignored.js";
 import {
-  SENTRY_ENABLED,
-  SENTRY_ENVIRONMENT,
-  SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE,
-  SENTRY_REPLAYS_SESSION_SAMPLE_RATE,
-  SENTRY_TRACES_SAMPLE_RATE,
-  createTracesSampler,
-} from "./sampling.js";
+  type InitSentryClientBaseOptions,
+  type ReplayMode,
+  initClientCore,
+} from "./client-core.js";
 
-export interface InitSentryClientOptions {
-  /** App name — tagged on every event for multi-tenant dashboards. */
-  app: string;
-  /** Override the public DSN (default: process.env.NEXT_PUBLIC_SENTRY_DSN). */
-  dsn?: string;
-  /** Disable Sentry when this returns false (e.g. cookie consent gate). */
-  enabled?: () => boolean;
-  /** Extra error patterns to ignore (merged with DEFAULT_IGNORED_ERRORS). */
-  ignoreErrors?: (string | RegExp)[];
-  /** Disable Replay if you don't want session recording. */
-  replay?: boolean;
-  /** Mask all text in Replay (default true — safe). Set false only if no PII risk. */
-  replayMaskAllText?: boolean;
-  /** Block media in Replay (default true). */
-  replayBlockAllMedia?: boolean;
+export type { ReplayMode } from "./client-core.js";
+
+export interface InitSentryClientOptions extends InitSentryClientBaseOptions {
   /**
-   * Same-origin tunnel route to bypass ad-blockers. Match the tunnelRoute you
-   * set in `withSentryConfig`. Example: `'/monitoring'`. Default: none.
+   * Replay strategy for this entry point: `true` (default — set up during
+   * `Sentry.init`, records from the very first line) or `false` (off).
+   *
+   * 🪤 `false` does **not** save any bytes here; it only zeroes
+   * `replaysOnErrorSampleRate`. See {@link ReplayMode}.
+   *
+   * `"lazy"` is accepted for source compatibility but is a *worse* deal on this
+   * entry point than on `/client-lazy`: the rrweb bytes stay in your initial
+   * chunk (the eager reference above is still there) **and** you additionally
+   * fetch Replay from the CDN. Use `@groupe-j/sentry-config/client-lazy` to get
+   * the actual saving.
+   *
+   * @default true
    */
-  tunnel?: string;
-  /**
-   * Send default PII (cookies, headers, IP). Default: false (RGPD-safer).
-   * Set true only when you have explicit user consent and need the data.
-   */
-  sendDefaultPii?: boolean;
+  replay?: ReplayMode;
 }
 
 export function initSentryClient(opts: InitSentryClientOptions): void {
-  const {
-    app,
-    dsn,
-    enabled,
-    ignoreErrors = [],
-    replay = true,
-    replayMaskAllText = true,
-    replayBlockAllMedia = true,
-    tunnel,
-    sendDefaultPii = false,
-  } = opts;
-
-  const isEnabled = SENTRY_ENABLED && (enabled?.() ?? true);
-
-  Sentry.init({
-    dsn: dsn ?? process.env.NEXT_PUBLIC_SENTRY_DSN,
-    environment: SENTRY_ENVIRONMENT,
-    release:
-      process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ?? process.env.VERCEL_GIT_COMMIT_SHA,
-    tracesSampler: createTracesSampler(SENTRY_TRACES_SAMPLE_RATE),
-    replaysSessionSampleRate: replay ? SENTRY_REPLAYS_SESSION_SAMPLE_RATE : 0,
-    replaysOnErrorSampleRate: replay ? SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE : 0,
-    enabled: isEnabled,
-    sendDefaultPii,
-    debug: false,
-    ...(tunnel && { tunnel }),
-    ignoreErrors: [...DEFAULT_IGNORED_ERRORS, ...ignoreErrors],
-    denyUrls: DEFAULT_DENY_URLS,
-    integrations: replay
-      ? [
-          Sentry.replayIntegration({
-            maskAllText: replayMaskAllText,
-            blockAllMedia: replayBlockAllMedia,
-          }),
-        ]
-      : [],
-    beforeSend: createSentryBeforeSend(app),
+  const { replay = true, ...rest } = opts;
+  initClientCore({
+    options: rest,
+    replay,
+    // The ONLY static `replayIntegration` reference in the package.
+    eagerReplay: (tuning) =>
+      Sentry.replayIntegration({
+        maskAllText: tuning.maskAllText,
+        blockAllMedia: tuning.blockAllMedia,
+      }),
   });
 }

@@ -83,10 +83,101 @@ import { initSentryClient } from '@groupe-j/sentry-config/client';
 
 initSentryClient({
   app: 'mega-hote',
-  // Optional: PDPA / cookie consent gate
+  // Optional: PDPA / cookie consent gate — evaluated ONCE, at init.
   enabled: () => hasUserConsent(),
 });
 ```
+
+> ⚠️ **Put this in `instrumentation-client.ts`, not `sentry.client.config.ts`.**
+> `sentry.client.config.ts` is injected only by the **webpack** path of
+> `@sentry/nextjs`. A Next 16 app builds with **Turbopack**, which never injects
+> it — so `initSentryClient` is never called, the browser SDK never boots, and
+> the project reports **zero pageloads and zero browser errors**, silently.
+> Nothing in this package can detect that from the inside: code that is never
+> imported cannot warn you. The symptom to watch for is a Sentry project with
+> server events but no `pageload` transactions.
+>
+> If you *are* initialised and want to be sure the SDK is armed (real DSN, not a
+> no-op client), call `assertSentryArmed(Sentry)` right after init — see below.
+
+### Replay: eager or lazy — and how to actually drop the bytes
+
+Session Replay (rrweb) is **~124 KB raw / ~40 KB gzip** of your initial chunk,
+on every page. There are two entry points; they take the same options and
+export the same `initSentryClient`, so switching is a one-line import change.
+
+| Import | Replay bytes in the initial chunk | Session replay | Replay on error |
+|--------|-----------------------------------|----------------|-----------------|
+| `…/client` (default, `replay: true`) | **bundled** | 10% prod | 100%, from init |
+| `…/client` with `replay: false` | ⚠️ **still bundled** | 0 | **0** |
+| `…/client-lazy` (default `replay: "lazy"`) | **absent** | 10% prod | 100%, from first idle after `load` |
+
+Measured with esbuild (minified, `@sentry/nextjs` 10.65, browser condition) on
+a minimal consumer:
+
+```
+/client      replay:true    292.2 KB raw /  97.5 KB gz   rrweb IN
+/client      replay:false   292.2 KB raw /  97.5 KB gz   rrweb IN   ← the trap
+/client-lazy replay:"lazy"  167.8 KB raw /  57.8 KB gz   rrweb OUT
+------------------------------------------------------------------
+saved                       124.4 KB raw /  39.7 KB gz
+```
+
+```ts
+// Drop the bytes: change the import, nothing else.
+import { initSentryClient } from '@groupe-j/sentry-config/client-lazy';
+
+initSentryClient({ app: 'mega-hote' });
+```
+
+🪤 **`replay: false` is a trap.** It saves **zero bytes** — the
+`Sentry.replayIntegration` reference on the `/client` entry is static, so
+bundlers (webpack *and* Turbopack) ship `@sentry-internal/replay` either way —
+and it silently sets `replaysOnErrorSampleRate` to `0`. You lose every error
+replay and keep every byte. If you want the bytes gone, use `/client-lazy`; if
+you want Replay gone for privacy reasons, `false` is correct and the wasted
+weight is the price.
+
+#### What `/client-lazy` costs you
+
+It uses the SDK's own `lazyLoadIntegration`, which injects
+`<script src="https://browser.sentry-cdn.com/<version>/replay.min.js">` at the
+first idle after the `load` event (or on the first captured error). That means:
+
+1. **CSP** — `script-src` must allow that origin. Pass `replayScriptNonce` if
+   you run `script-src 'nonce-…'`. If the app has a service worker
+   (Serwist/Workbox), the SW may re-fetch that script through the Fetch API, in
+   which case the origin is **also** needed in `connect-src`.
+2. **Content blockers** — `browser.sentry-cdn.com` is on common blocklists, and
+   `tunnel` does **not** help (it tunnels *events*, not the script). On failure
+   the page is unaffected and a breadcrumb explains why the next event has no
+   replay. Self-host with `replayCdnBaseUrl` if that matters to you — note it
+   takes an **origin only**: the SDK resolves `/<version>/replay.min.js` from
+   the root, so any path you pass is discarded.
+3. **No SRI** — the SDK cannot know the hash ahead of time, so the tag carries
+   `crossorigin="anonymous"` but no `integrity`. Eager Replay ships the same
+   code pinned by your lockfile instead.
+4. **The URL is pinned to the installed SDK version** (`<cdnBaseUrl>/<SDK_VERSION>/replay.min.js`).
+   A dependency bump that outruns the CDN breaks Replay everywhere at once, and
+   a lazy feature that fails is invisible by nature — the `sharp 0.35` failure
+   class. On failure the scope tag `replay.lazy: "failed"` is set so you can
+   **query** for it in Sentry; no extra event is captured (house rule: one error
+   = one capture).
+5. **Boot-time errors have no run-up** — Replay records the seconds *preceding*
+   an error from a rolling buffer that only exists once the integration is
+   attached. `replaysOnErrorSampleRate` stays at `1.0` and is honest for every
+   error after attach (the overwhelming majority); errors thrown in the
+   `[init → first paint]` window get no run-up. Stay on `/client` with
+   `replay: true` if boot-time errors are what you are hunting.
+
+> A local `import()` of a module that references `Sentry.replayIntegration`
+> does **not** work — measured: rrweb still lands in the initial chunk, because
+> the SDK barrel is reachable from both graphs and chunk assignment hoists it.
+> See `DECISIONS.md` §14.
+
+> `bundleSizeOptimizations` from `@sentry/nextjs` does **not** help either: it
+> is a **no-op under Turbopack** (verified byte-identical SDK chunk on
+> j-element).
 
 ### `sentry.server.config.ts`
 
@@ -248,6 +339,19 @@ Sentry.init({
 
 If you omit the argument, it defaults to `SENTRY_TRACES_SAMPLE_RATE` (10% prod / 100% dev — test environments send 0 events because `SENTRY_ENABLED` is `false`, not because the sampler returns 0).
 
+The second argument is the **web-vital rate** (default `1.0`, override with
+`NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE`). Since SDK 8.x, **INP is emitted as
+a standalone span**, one per page lifetime, sampled by this very
+`tracesSampler`. At the 10% traces rate a low-traffic site collects
+approximately zero INP samples — which is why INP was empty on all 13 Sentry
+projects while LCP/CLS/FCP/TTFB (carried by the pageload transaction) were
+fine. INP is a Google ranking signal, so we collect it at 100% by default; the
+volume is one span per page, not per interaction.
+
+```ts
+createTracesSampler(0.05, 1.0); // 5% of routes, 100% of web vitals
+```
+
 ### Advanced: custom redaction
 
 ```ts
@@ -267,6 +371,8 @@ const cleaned = redact(myEvent);
 | `VERCEL_ENV` | Auto on Vercel | environment tag (fallback) |
 | `VERCEL_GIT_COMMIT_SHA` | Auto on Vercel | release tracking |
 | `NODE_ENV` | Auto | sample rates + enabled flag + environment fallback |
+| `NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE` | Optional, client | web-vital (INP) sample rate — default `1.0` |
+| `NEXT_PUBLIC_SENTRY_REPLAY_MODE` | Optional, **build-time** | `lazy` → Replay in an async chunk (see Replay section) |
 
 ## What this does NOT do
 

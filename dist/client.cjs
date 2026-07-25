@@ -31,6 +31,7 @@ var SENSITIVE_KEYS = /* @__PURE__ */ new Set([
   "emails",
   "phone",
   "phonenumber",
+  "name",
   "fullname",
   "firstname",
   "lastname",
@@ -38,6 +39,11 @@ var SENSITIVE_KEYS = /* @__PURE__ */ new Set([
   "familyname",
   "dateofbirth",
   "dob",
+  // Lead / contact free-text (leads schema across portfolio apps —
+  // `name`/`location`/`description` carry a person's identity, home town,
+  // and self-description, so they are PII once attached to an event).
+  "location",
+  "description",
   // Government ID (Thailand, France, Luxembourg, EU)
   "passport",
   "passporturl",
@@ -211,6 +217,26 @@ var SENTRY_REPLAYS_SESSION_SAMPLE_RATE = process.env.NODE_ENV === "production" ?
 var SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE = 1;
 var SENTRY_ENABLED = process.env.NODE_ENV !== "test";
 var SENTRY_ENVIRONMENT = process.env.SENTRY_ENVIRONMENT ?? process.env.NEXT_PUBLIC_SENTRY_ENVIRONMENT ?? process.env.VERCEL_ENV ?? process.env.NODE_ENV ?? "development";
+var SENTRY_WEBVITAL_SAMPLE_RATE = parseRate(
+  process.env.NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE ?? process.env.SENTRY_WEBVITAL_SAMPLE_RATE,
+  1
+);
+function parseRate(raw, fallback) {
+  if (raw === void 0 || raw.trim() === "") return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : fallback;
+}
+var WEB_VITAL_ORIGINS = /* @__PURE__ */ new Set([
+  "auto.http.browser.inp",
+  "auto.http.browser.cls",
+  "auto.http.browser.lcp"
+]);
+function isWebVitalSpan(ctx) {
+  const origin = ctx.attributes?.["sentry.origin"];
+  if (typeof origin === "string" && WEB_VITAL_ORIGINS.has(origin)) return true;
+  const op = ctx.attributes?.["sentry.op"];
+  return typeof op === "string" && op.startsWith("ui.interaction.");
+}
 var SKIP_PATTERNS = [
   /\/api\/health$/,
   /\/api\/healthz$/,
@@ -219,48 +245,118 @@ var SKIP_PATTERNS = [
   /\/_next\/data\//,
   /\.(?:ico|png|jpg|jpeg|gif|webp|svg|woff2?|ttf|map|css|js)$/
 ];
-function createTracesSampler(defaultRate = SENTRY_TRACES_SAMPLE_RATE) {
+function createTracesSampler(defaultRate = SENTRY_TRACES_SAMPLE_RATE, webVitalRate = SENTRY_WEBVITAL_SAMPLE_RATE) {
   return (ctx) => {
+    if (isWebVitalSpan(ctx)) return webVitalRate;
     const url = ctx.transactionContext?.name ?? ctx.name ?? ctx.request?.url ?? "";
     if (SKIP_PATTERNS.some((re) => re.test(url))) return 0;
     return defaultRate;
   };
 }
 
-// src/client.ts
-function initSentryClient(opts) {
+// src/client-core.ts
+function initClientCore({ options, replay, eagerReplay }) {
   const {
     app,
     dsn,
     enabled,
     ignoreErrors = [],
-    replay = true,
     replayMaskAllText = true,
     replayBlockAllMedia = true,
     tunnel,
+    replayCdnBaseUrl,
+    replayScriptNonce,
     sendDefaultPii = false
-  } = opts;
+  } = options;
   const isEnabled = SENTRY_ENABLED && (enabled?.() ?? true);
+  const replayEnabled = replay !== false;
+  const replayEager = replay === true && eagerReplay !== null;
+  const tuning = {
+    maskAllText: replayMaskAllText,
+    blockAllMedia: replayBlockAllMedia
+  };
   Sentry__namespace.init({
     dsn: dsn ?? process.env.NEXT_PUBLIC_SENTRY_DSN,
     environment: SENTRY_ENVIRONMENT,
     release: process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ?? process.env.VERCEL_GIT_COMMIT_SHA,
     tracesSampler: createTracesSampler(SENTRY_TRACES_SAMPLE_RATE),
-    replaysSessionSampleRate: replay ? SENTRY_REPLAYS_SESSION_SAMPLE_RATE : 0,
-    replaysOnErrorSampleRate: replay ? SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE : 0,
+    // Rates are identical between `true` and `"lazy"`: the integration reads
+    // them off the client options whenever it is set up — at init, or later.
+    replaysSessionSampleRate: replayEnabled ? SENTRY_REPLAYS_SESSION_SAMPLE_RATE : 0,
+    replaysOnErrorSampleRate: replayEnabled ? SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE : 0,
     enabled: isEnabled,
     sendDefaultPii,
     debug: false,
     ...tunnel && { tunnel },
+    ...replayCdnBaseUrl && { cdnBaseUrl: replayCdnBaseUrl },
     ignoreErrors: [...DEFAULT_IGNORED_ERRORS, ...ignoreErrors],
     denyUrls: DEFAULT_DENY_URLS,
-    integrations: replay ? [
-      Sentry__namespace.replayIntegration({
-        maskAllText: replayMaskAllText,
-        blockAllMedia: replayBlockAllMedia
-      })
-    ] : [],
+    integrations: [
+      // Explicit — do not rely on the SDK default. `enableInp: true` has been
+      // the default since SDK 8.x, but stating it here makes INP collection
+      // survive a default flip and documents that INP (a Google ranking signal
+      // since it replaced FID) is a first-class metric for us.
+      // Note: `@sentry/nextjs` re-exports its OWN browserTracingIntegration
+      // (App Router navigation instrumentation included), and a user-supplied
+      // integration replaces the default of the same name — nothing is lost.
+      Sentry__namespace.browserTracingIntegration({ enableInp: true }),
+      ...replayEager && eagerReplay ? [eagerReplay(tuning)] : []
+    ],
     beforeSend: createSentryBeforeSend(app)
+  });
+  if (replayEnabled && !replayEager && isEnabled) {
+    scheduleLazyReplay(tuning, replayScriptNonce);
+  }
+}
+function scheduleLazyReplay(tuning, scriptNonce) {
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+  const MAX_ATTEMPTS = 2;
+  let pending = false;
+  let attempts = 0;
+  let attached = false;
+  const attach = () => {
+    if (pending || attached || attempts >= MAX_ATTEMPTS) return;
+    pending = true;
+    attempts += 1;
+    Sentry__namespace.lazyLoadIntegration("replayIntegration", scriptNonce).then((replayIntegration2) => {
+      attached = true;
+      pending = false;
+      Sentry__namespace.addIntegration(replayIntegration2(tuning));
+    }).catch(() => {
+      pending = false;
+      Sentry__namespace.addBreadcrumb({
+        category: "sentry.replay",
+        level: "warning",
+        message: "lazy Replay bundle failed to load \u2014 no session replay for this page"
+      });
+      Sentry__namespace.setTag("replay.lazy", "failed");
+    });
+  };
+  Sentry__namespace.getClient()?.on("beforeSendEvent", (event) => {
+    if (event.exception) attach();
+  });
+  const onLoaded = () => {
+    if (typeof window.requestIdleCallback === "function") {
+      window.requestIdleCallback(() => attach(), { timeout: 3e3 });
+    } else {
+      window.setTimeout(attach, 1500);
+    }
+  };
+  if (document.readyState === "complete") onLoaded();
+  else window.addEventListener("load", onLoaded, { once: true });
+}
+
+// src/client.ts
+function initSentryClient(opts) {
+  const { replay = true, ...rest } = opts;
+  initClientCore({
+    options: rest,
+    replay,
+    // The ONLY static `replayIntegration` reference in the package.
+    eagerReplay: (tuning) => Sentry__namespace.replayIntegration({
+      maskAllText: tuning.maskAllText,
+      blockAllMedia: tuning.blockAllMedia
+    })
   });
 }
 

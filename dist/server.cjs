@@ -36,6 +36,7 @@ var SENSITIVE_KEYS = /* @__PURE__ */ new Set([
   "emails",
   "phone",
   "phonenumber",
+  "name",
   "fullname",
   "firstname",
   "lastname",
@@ -43,6 +44,11 @@ var SENSITIVE_KEYS = /* @__PURE__ */ new Set([
   "familyname",
   "dateofbirth",
   "dob",
+  // Lead / contact free-text (leads schema across portfolio apps —
+  // `name`/`location`/`description` carry a person's identity, home town,
+  // and self-description, so they are PII once attached to an event).
+  "location",
+  "description",
   // Government ID (Thailand, France, Luxembourg, EU)
   "passport",
   "passporturl",
@@ -207,6 +213,26 @@ var SENTRY_PROFILES_SAMPLE_RATE = process.env.NODE_ENV === "production" ? 0.1 : 
 process.env.NODE_ENV === "production" ? 0.1 : 0;
 var SENTRY_ENABLED = process.env.NODE_ENV !== "test";
 var SENTRY_ENVIRONMENT = process.env.SENTRY_ENVIRONMENT ?? process.env.NEXT_PUBLIC_SENTRY_ENVIRONMENT ?? process.env.VERCEL_ENV ?? process.env.NODE_ENV ?? "development";
+var SENTRY_WEBVITAL_SAMPLE_RATE = parseRate(
+  process.env.NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE ?? process.env.SENTRY_WEBVITAL_SAMPLE_RATE,
+  1
+);
+function parseRate(raw, fallback) {
+  if (raw === void 0 || raw.trim() === "") return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : fallback;
+}
+var WEB_VITAL_ORIGINS = /* @__PURE__ */ new Set([
+  "auto.http.browser.inp",
+  "auto.http.browser.cls",
+  "auto.http.browser.lcp"
+]);
+function isWebVitalSpan(ctx) {
+  const origin = ctx.attributes?.["sentry.origin"];
+  if (typeof origin === "string" && WEB_VITAL_ORIGINS.has(origin)) return true;
+  const op = ctx.attributes?.["sentry.op"];
+  return typeof op === "string" && op.startsWith("ui.interaction.");
+}
 var SKIP_PATTERNS = [
   /\/api\/health$/,
   /\/api\/healthz$/,
@@ -215,8 +241,9 @@ var SKIP_PATTERNS = [
   /\/_next\/data\//,
   /\.(?:ico|png|jpg|jpeg|gif|webp|svg|woff2?|ttf|map|css|js)$/
 ];
-function createTracesSampler(defaultRate = SENTRY_TRACES_SAMPLE_RATE) {
+function createTracesSampler(defaultRate = SENTRY_TRACES_SAMPLE_RATE, webVitalRate = SENTRY_WEBVITAL_SAMPLE_RATE) {
   return (ctx) => {
+    if (isWebVitalSpan(ctx)) return webVitalRate;
     const url = ctx.transactionContext?.name ?? ctx.name ?? ctx.request?.url ?? "";
     if (SKIP_PATTERNS.some((re) => re.test(url))) return 0;
     return defaultRate;

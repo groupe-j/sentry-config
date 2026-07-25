@@ -221,6 +221,113 @@ portfolio, pas un patch dans la lib.
 
 ---
 
+## 14. Replay paresseux via `lazyLoadIntegration` (CDN), sur une entrée `/client-lazy` dédiée
+
+**Contexte** : le chunk SDK Sentry + rrweb pèse ~581 KB bruts / ~184 KB gzip et
+charge sur 100% des pages (mesuré sur jepeuxconstruire). L'option `replay: false`
+existante ne retire **aucun octet** : la référence à `Sentry.replayIntegration`
+dans `client.ts` est **statique**, donc le bundler embarque `@sentry-internal/replay`
+quoi qu'il arrive — elle met juste `replaysOnErrorSampleRate` à 0. C'est un piège :
+on perd la fonctionnalité sans gagner le poids.
+
+**Ce qu'on a essayé d'abord, et qui NE MARCHE PAS** : un module local
+`src/replay-lazy.ts` chargé par `import("./replay-lazy.js")`, plus un interrupteur
+build-time `NEXT_PUBLIC_SENTRY_REPLAY_MODE=lazy` censé rendre la branche eager
+morte. Mesuré à l'octet avec esbuild (`splitting: true`, minifié) : **aucun gain**,
+rrweb reste dans le chunk **initial** dans les 4 variantes (`true`, `false`,
+`"lazy"`, `"lazy"` + define). Un split idéal écrit à la main donne le même
+résultat : 285.8 KB initiaux.
+
+La raison : le module lazy importe lui aussi le barrel `@sentry/nextjs`. Ce barrel
+est donc atteignable depuis le graphe initial **et** depuis le graphe async, et
+l'assignation de chunks le place dans le chunk commun — que le graphe initial
+importe statiquement. Rendre la branche eager morte ne change rien tant qu'un
+module, même asynchrone, référence `Sentry.replayIntegration` : le symbole reste
+vivant et le module qui le porte reste dans le chunk partagé. **Le poids ne suit
+pas la frontière `import()`, il suit l'atteignabilité du barrel.**
+
+**Décision** : utiliser l'API officielle du SDK, `Sentry.lazyLoadIntegration(
+'replayIntegration')`, qui injecte `<script src="<cdnBaseUrl>/<version>/replay.min.js">`
+à l'exécution. Aucun octet de rrweb dans le bundle **par construction**, quel que
+soit le bundler — c'est la seule propriété qu'on peut garantir sans dépendre de
+l'algorithme de chunking du consommateur. Elle vit sur une **entrée séparée**
+`@groupe-j/sentry-config/client-lazy`, dont aucun module atteignable ne mentionne
+`Sentry.replayIntegration` :
+
+```
+/client      replay:true    292.2 KB raw /  97.5 KB gz   rrweb IN
+/client      replay:false   292.2 KB raw /  97.5 KB gz   rrweb IN   ← le piège
+/client-lazy replay:"lazy"  167.8 KB raw /  57.8 KB gz   rrweb OUT
+gain                        124.4 KB raw /  39.7 KB gz
+```
+
+**Pourquoi une 2e entrée plutôt qu'un mode runtime sur `/client`** : parce que la
+propriété « ce module ne référence pas Replay » doit être **statique** pour que le
+bundler puisse en tirer quoi que ce chose. Un `replay: "lazy"` passé à l'exécution
+sur `/client` ne peut pas supprimer la branche eager du même module — c'est
+exactement le piège de `replay: false`, et le reproduire aurait été mentir une
+seconde fois sur les octets. Corollaire : `/client` garde **exactement** son
+comportement et son API, donc les 10 apps en prod ne bougent pas tant qu'elles
+ne changent pas leur ligne d'import.
+
+**Pourquoi pas le flag build-time `NEXT_PUBLIC_*`** : en plus de ne pas marcher
+(ci-dessus), il reposait sur une hypothèse invérifiable depuis ce repo — que Next
+inline bien les littéraux `NEXT_PUBLIC_*` **dans `node_modules`**, sous webpack
+*et* Turbopack. Une optimisation qui devient silencieusement un no-op selon le
+bundler du consommateur est pire que pas d'optimisation.
+
+**Coûts assumés** (documentés dans `client-lazy.ts` et le README) : host tiers dans
+la CSP `script-src` — et `connect-src` sous service worker (cf. incident CSP/SW du
+portfolio) ; blocable par les bloqueurs de pub, que `tunnel` ne contourne pas (il
+tunnelise les *events*, pas le script) ; pas de SRI possible ; et une erreur levée
+avant l'attachement n'a pas de run-up enregistré. Échappatoires : `replayCdnBaseUrl`
+pour auto-héberger, `replayScriptNonce` pour les CSP à nonce, ou rester sur
+`/client`.
+
+**Conséquences si renversé** : un seul accès `Sentry.replayIntegration` dans
+n'importe quel module atteignable depuis `client-lazy.ts` ré-attache rrweb au
+chunk initial et annule tout le gain — **sans qu'aucun test de comportement ne
+casse**. C'est pour ça que `src/client.test.ts` contient un test d'invariant qui
+parcourt le **graphe d'imports local** depuis `client-lazy.ts` et vérifie sur le
+texte source qu'aucun module n'y touche (accès membre, accès calculé,
+déstructuration, import nommé). Ne le supprime pas.
+
+Portée honnête de ce garde-fou : il travaille sur le texte source, pas sur un
+bundle. Il attrape le cas réaliste (quelqu'un ajoute un module ou un import) mais
+pas une exfiltration exotique via alias indirect. Le vrai filet serait de bundler
+`client-lazy.ts` dans le test et d'assertion l'absence de marqueur rrweb dans la
+sortie ; c'est plus lourd (dépendance esbuild explicite en test) et ça n'a pas été
+fait — à faire si le garde-fou textuel se révèle insuffisant.
+
+---
+
+## 15. Les web vitals standalone (INP) ont leur propre taux d'échantillonnage
+
+**Contexte** : INP était **vide sur les 13 projets Sentry de l'org** alors que
+LCP/CLS/FCP/TTFB remontaient. Depuis le SDK 8.x, INP n'est pas une mesure attachée
+à la transaction pageload : c'est un **span standalone** (un span racine par page),
+échantillonné par notre propre `tracesSampler`. À 10% en prod, une métrique
+émise une fois par page sur des sites à faible trafic donne ~0 échantillon. Pire :
+le `name` d'un span INP est un **sélecteur DOM** (`htmlTreeAsString`), pas une URL —
+la skip-list `/\.(?:…|map|css|js)$/` supprimait donc les interactions dont la
+dernière classe CSS finit par `.map` (nos apps cartographiques), `.css` ou `.js`.
+
+**Décision** : `createTracesSampler(defaultRate, webVitalRate)` teste **d'abord**
+les attributs (`sentry.origin` `auto.http.browser.*`, `sentry.op` `ui.interaction.*`)
+et renvoie `SENTRY_WEBVITAL_SAMPLE_RATE` (défaut `1.0`, override
+`NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE`) sans jamais appliquer les patterns d'URL.
+
+**Pourquoi 1.0** : INP est un signal de classement Google (il a remplacé le FID) et
+le volume est borné à ~1 span par page ayant eu une interaction — pas par
+interaction. Sur notre trafic réel (site le plus visité : ~89 clics Bing/mois), le
+coût quota est négligeable devant l'aveuglement actuel.
+
+**Conséquences si renversé** : repasser les web vitals sur le taux `traces` (0.1)
+re-vide l'INP de tous les projets, sans aucun signal d'erreur — la panne est
+silencieuse, exactement comme elle l'a été jusqu'ici.
+
+---
+
 ## Comment ajouter une nouvelle décision
 
 Quand tu fais un choix non-évident lors d'un futur refactor :

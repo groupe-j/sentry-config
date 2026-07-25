@@ -1,6 +1,6 @@
 {
   "name": "@groupe-j/sentry-config",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Shared Sentry config + PII redaction for groupe-j apps. Extracted from ridesamui.",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -16,6 +16,11 @@
       "types": "./dist/client.d.ts",
       "import": "./dist/client.js",
       "require": "./dist/client.cjs"
+    },
+    "./client-lazy": {
+      "types": "./dist/client-lazy.d.ts",
+      "import": "./dist/client-lazy.js",
+      "require": "./dist/client-lazy.cjs"
     },
     "./server": {
       "types": "./dist/server.d.ts",

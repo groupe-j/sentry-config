@@ -33,12 +33,72 @@ export const SENTRY_ENVIRONMENT =
   "development";
 
 /**
+ * Web-vital sample rate — INP & friends.
+ *
+ * Why it is NOT `SENTRY_TRACES_SAMPLE_RATE`: since SDK 8.x the browser SDK
+ * emits INP (and optionally CLS/LCP) as **standalone spans**, i.e. one root
+ * span per measurement, sampled through the very same `tracesSampler` as a
+ * pageload. At 10% in production, a portfolio of low-traffic sites collects
+ * ~0 INP samples — which is exactly what we observed: LCP/CLS/FCP/TTFB (which
+ * ride along the pageload transaction, one per pageview) were populated on the
+ * 13 Sentry projects while INP was empty everywhere.
+ *
+ * INP is emitted at most once per page lifetime, so 100% is cheap. Dial it
+ * down with `NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE` on a high-traffic app.
+ */
+export const SENTRY_WEBVITAL_SAMPLE_RATE = parseRate(
+  process.env.NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE ??
+    process.env.SENTRY_WEBVITAL_SAMPLE_RATE,
+  1.0,
+);
+
+function parseRate(raw: string | undefined, fallback: number): number {
+  // A declared-but-empty env var is the common Vercel accident, and `Number("")`
+  // is `0` — which is a perfectly valid rate. Left unguarded, an empty
+  // NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE would silently set the rate to 0 and
+  // re-create the exact "INP is empty everywhere" bug this module exists to fix.
+  // Blank means "unset".
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : fallback;
+}
+
+/**
  * Loose SamplingContext shape — matches @sentry/types without coupling.
  */
 interface SamplingContextLike {
   name?: string;
   transactionContext?: { name?: string };
   request?: { url?: string };
+  /** Span attributes known at sampling time (SDK 8+). */
+  attributes?: Record<string, unknown>;
+}
+
+/**
+ * Standalone web-vital spans carry `sentry.origin = auto.http.browser.<vital>`.
+ *
+ * ⚠️ Deliberately an **allowlist**, not a `auto.http.browser.` prefix test.
+ * `FetchStreamPerformance` tags its spans `auto.http.browser.stream`, and those
+ * become root spans (so they reach this sampler) whenever no idle span is
+ * active — i.e. any SSE / streaming request a second after pageload. A prefix
+ * test would sample that traffic at the web-vital rate (100%) instead of the
+ * traces rate. These three are the only web-vital origins the SDK emits
+ * (`browser-utils/metrics/{inp,cls,lcp}.js`).
+ */
+const WEB_VITAL_ORIGINS = new Set([
+  "auto.http.browser.inp",
+  "auto.http.browser.cls",
+  "auto.http.browser.lcp",
+]);
+
+function isWebVitalSpan(ctx: SamplingContextLike): boolean {
+  const origin = ctx.attributes?.["sentry.origin"];
+  if (typeof origin === "string" && WEB_VITAL_ORIGINS.has(origin)) return true;
+  // Fallback for INP specifically: its op is `ui.interaction.<type>`. The only
+  // other `ui.interaction.*` producer creates *child* spans of the pageload
+  // transaction, which never reach a sampler.
+  const op = ctx.attributes?.["sentry.op"];
+  return typeof op === "string" && op.startsWith("ui.interaction.");
 }
 
 /**
@@ -57,9 +117,23 @@ const SKIP_PATTERNS = [
 /**
  * Builds a `tracesSampler` that returns 0 for low-value routes.
  * Pass to `Sentry.init({ tracesSampler: createTracesSampler(0.1) })`.
+ *
+ * Web-vital standalone spans (INP…) are handled FIRST and on their own rate.
+ * Two reasons:
+ *  1. quota: see {@link SENTRY_WEBVITAL_SAMPLE_RATE} — 10% of a once-per-page
+ *     metric is statistically nothing on our traffic;
+ *  2. correctness: the `name` of an INP span is a DOM selector, not a URL
+ *     (`htmlTreeAsString(target)`, e.g. `div#root > div.map`). Running URL
+ *     patterns on it silently drops interactions whose deepest CSS class ends
+ *     with `.map`, `.css`, `.js`… — a real hazard on our map-heavy apps.
  */
-export function createTracesSampler(defaultRate: number = SENTRY_TRACES_SAMPLE_RATE) {
+export function createTracesSampler(
+  defaultRate: number = SENTRY_TRACES_SAMPLE_RATE,
+  webVitalRate: number = SENTRY_WEBVITAL_SAMPLE_RATE,
+) {
   return (ctx: SamplingContextLike): number => {
+    if (isWebVitalSpan(ctx)) return webVitalRate;
+
     const url =
       ctx.transactionContext?.name ??
       ctx.name ??

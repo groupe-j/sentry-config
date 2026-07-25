@@ -1,5 +1,7 @@
 import * as Sentry from '@sentry/nextjs';
 
+// src/client-core.ts
+
 // src/redaction.ts
 var SENSITIVE_KEYS = /* @__PURE__ */ new Set([
   // Identity
@@ -149,9 +151,46 @@ function createSentryBeforeSend(appName) {
   };
 }
 
+// src/ignored.ts
+var DEFAULT_IGNORED_ERRORS = [
+  // Next.js framework artifacts
+  "NEXT_NOT_FOUND",
+  "NEXT_REDIRECT",
+  "NEXT_HTTP_ERROR_FALLBACK",
+  // Network errors — almost always user side (offline, blocking extensions)
+  "AbortError",
+  "NetworkError",
+  "Failed to fetch",
+  "Load failed",
+  "Network request failed",
+  "ChunkLoadError",
+  "Loading chunk",
+  "Loading CSS chunk",
+  // Browser quirks
+  /ResizeObserver loop/i,
+  /Non-Error promise rejection captured/i,
+  /hydration/i,
+  // Browser extensions injecting code
+  "Script error.",
+  /chrome-extension/,
+  /moz-extension/,
+  /safari-extension/,
+  // User cancellations
+  "The user aborted a request",
+  "The operation was aborted"
+];
+var DEFAULT_DENY_URLS = [
+  /extensions\//i,
+  /^chrome:\/\//i,
+  /^chrome-extension:\/\//i,
+  /^moz-extension:\/\//i,
+  /^safari-extension:\/\//i,
+  /^safari-web-extension:\/\//i
+];
+
 // src/sampling.ts
 var SENTRY_TRACES_SAMPLE_RATE = process.env.NODE_ENV === "production" ? 0.1 : 1;
-var SENTRY_PROFILES_SAMPLE_RATE = process.env.NODE_ENV === "production" ? 0.1 : 1;
+process.env.NODE_ENV === "production" ? 0.1 : 1;
 var SENTRY_REPLAYS_SESSION_SAMPLE_RATE = process.env.NODE_ENV === "production" ? 0.1 : 0;
 var SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE = 1;
 var SENTRY_ENABLED = process.env.NODE_ENV !== "test";
@@ -192,130 +231,110 @@ function createTracesSampler(defaultRate = SENTRY_TRACES_SAMPLE_RATE, webVitalRa
     return defaultRate;
   };
 }
-function setSentryUser(user) {
-  Sentry.setUser({
-    id: user.id,
-    ...user.email && { email: user.email }
-  });
-  if (user.tenant) Sentry.setTag("tenant", user.tenant);
-  if (user.plan) Sentry.setTag("plan", user.plan);
-}
-function clearSentryUser() {
-  Sentry.setUser(null);
-  Sentry.setTag("tenant", void 0);
-  Sentry.setTag("plan", void 0);
-}
 
-// src/bot.ts
-var BOT_REGEX = /bot|crawler|spider|crawling|scraper|http(?:client|client)|curl\/|wget\/|python-requests|preview|fetch|axios\/|node-fetch|lighthouse|headlesschrome|pingdombot|uptimerobot|statuscake|datadog/i;
-function isBot(userAgent) {
-  if (!userAgent) return false;
-  return BOT_REGEX.test(userAgent);
-}
-
-// src/ignored.ts
-var DEFAULT_IGNORED_ERRORS = [
-  // Next.js framework artifacts
-  "NEXT_NOT_FOUND",
-  "NEXT_REDIRECT",
-  "NEXT_HTTP_ERROR_FALLBACK",
-  // Network errors — almost always user side (offline, blocking extensions)
-  "AbortError",
-  "NetworkError",
-  "Failed to fetch",
-  "Load failed",
-  "Network request failed",
-  "ChunkLoadError",
-  "Loading chunk",
-  "Loading CSS chunk",
-  // Browser quirks
-  /ResizeObserver loop/i,
-  /Non-Error promise rejection captured/i,
-  /hydration/i,
-  // Browser extensions injecting code
-  "Script error.",
-  /chrome-extension/,
-  /moz-extension/,
-  /safari-extension/,
-  // User cancellations
-  "The user aborted a request",
-  "The operation was aborted"
-];
-var DEFAULT_DENY_URLS = [
-  /extensions\//i,
-  /^chrome:\/\//i,
-  /^chrome-extension:\/\//i,
-  /^moz-extension:\/\//i,
-  /^safari-extension:\/\//i,
-  /^safari-web-extension:\/\//i
-];
-function withCronMonitor(monitorSlug, handler, options) {
-  return async (...args) => {
-    return Sentry.withMonitor(
-      monitorSlug,
-      async () => handler(...args),
-      {
-        schedule: { type: "crontab", value: options.schedule },
-        maxRuntime: options.maxRuntimeMinutes ?? 30,
-        checkinMargin: options.checkinMarginMinutes ?? 5,
-        timezone: options.timezone ?? "UTC",
-        failureIssueThreshold: options.failureIssueThreshold ?? 1,
-        recoveryThreshold: options.recoveryThreshold ?? 1
-      }
-    );
+// src/client-core.ts
+function initClientCore({ options, replay, eagerReplay }) {
+  const {
+    app,
+    dsn,
+    enabled,
+    ignoreErrors = [],
+    replayMaskAllText = true,
+    replayBlockAllMedia = true,
+    tunnel,
+    replayCdnBaseUrl,
+    replayScriptNonce,
+    sendDefaultPii = false
+  } = options;
+  const isEnabled = SENTRY_ENABLED && (enabled?.() ?? true);
+  const replayEnabled = replay !== false;
+  const tuning = {
+    maskAllText: replayMaskAllText,
+    blockAllMedia: replayBlockAllMedia
   };
+  Sentry.init({
+    dsn: dsn ?? process.env.NEXT_PUBLIC_SENTRY_DSN,
+    environment: SENTRY_ENVIRONMENT,
+    release: process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ?? process.env.VERCEL_GIT_COMMIT_SHA,
+    tracesSampler: createTracesSampler(SENTRY_TRACES_SAMPLE_RATE),
+    // Rates are identical between `true` and `"lazy"`: the integration reads
+    // them off the client options whenever it is set up — at init, or later.
+    replaysSessionSampleRate: replayEnabled ? SENTRY_REPLAYS_SESSION_SAMPLE_RATE : 0,
+    replaysOnErrorSampleRate: replayEnabled ? SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE : 0,
+    enabled: isEnabled,
+    sendDefaultPii,
+    debug: false,
+    ...tunnel && { tunnel },
+    ...replayCdnBaseUrl && { cdnBaseUrl: replayCdnBaseUrl },
+    ignoreErrors: [...DEFAULT_IGNORED_ERRORS, ...ignoreErrors],
+    denyUrls: DEFAULT_DENY_URLS,
+    integrations: [
+      // Explicit — do not rely on the SDK default. `enableInp: true` has been
+      // the default since SDK 8.x, but stating it here makes INP collection
+      // survive a default flip and documents that INP (a Google ranking signal
+      // since it replaced FID) is a first-class metric for us.
+      // Note: `@sentry/nextjs` re-exports its OWN browserTracingIntegration
+      // (App Router navigation instrumentation included), and a user-supplied
+      // integration replaces the default of the same name — nothing is lost.
+      Sentry.browserTracingIntegration({ enableInp: true }),
+      ...[]
+    ],
+    beforeSend: createSentryBeforeSend(app)
+  });
+  if (replayEnabled && true && isEnabled) {
+    scheduleLazyReplay(tuning, replayScriptNonce);
+  }
 }
-
-// src/trpc.ts
-var CLIENT_FAULT_CODES = /* @__PURE__ */ new Set([
-  "BAD_REQUEST",
-  "UNAUTHORIZED",
-  "FORBIDDEN",
-  "NOT_FOUND",
-  "TIMEOUT",
-  "CONFLICT",
-  "PRECONDITION_FAILED",
-  "PAYLOAD_TOO_LARGE",
-  "METHOD_NOT_SUPPORTED",
-  "UNPROCESSABLE_CONTENT",
-  "TOO_MANY_REQUESTS",
-  "CLIENT_CLOSED_REQUEST"
-]);
-function shouldReportTrpcError(code) {
-  return !CLIENT_FAULT_CODES.has(code);
-}
-function createTrpcSentryOnError(Sentry3) {
-  return ({ error, path, type }) => {
-    if (!shouldReportTrpcError(error.code)) return;
-    Sentry3.captureException(error.cause ?? error, {
-      tags: {
-        trpcPath: path ?? "<no-path>",
-        trpcType: type
-      }
+function scheduleLazyReplay(tuning, scriptNonce) {
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+  const MAX_ATTEMPTS = 2;
+  let pending = false;
+  let attempts = 0;
+  let attached = false;
+  const attach = () => {
+    if (pending || attached || attempts >= MAX_ATTEMPTS) return;
+    pending = true;
+    attempts += 1;
+    Sentry.lazyLoadIntegration("replayIntegration", scriptNonce).then((replayIntegration) => {
+      attached = true;
+      pending = false;
+      Sentry.addIntegration(replayIntegration(tuning));
+    }).catch(() => {
+      pending = false;
+      Sentry.addBreadcrumb({
+        category: "sentry.replay",
+        level: "warning",
+        message: "lazy Replay bundle failed to load \u2014 no session replay for this page"
+      });
+      Sentry.setTag("replay.lazy", "failed");
     });
   };
+  Sentry.getClient()?.on("beforeSendEvent", (event) => {
+    if (event.exception) attach();
+  });
+  const onLoaded = () => {
+    if (typeof window.requestIdleCallback === "function") {
+      window.requestIdleCallback(() => attach(), { timeout: 3e3 });
+    } else {
+      window.setTimeout(attach, 1500);
+    }
+  };
+  if (document.readyState === "complete") onLoaded();
+  else window.addEventListener("load", onLoaded, { once: true });
 }
 
-// src/trpc-middleware.ts
-function createSentryTrpcMiddleware(Sentry3, options = {}) {
-  const { attachRpcInput = true, ...rest } = options;
-  return Sentry3.trpcMiddleware({ attachRpcInput, ...rest });
+// src/client-lazy.ts
+function initSentryClient(opts) {
+  const { replay = "lazy", ...rest } = opts;
+  initClientCore({
+    options: rest,
+    replay,
+    // `null` is the load-bearing part: no eager factory means no static
+    // `replayIntegration` reference reachable from this entry point.
+    eagerReplay: null
+  });
 }
 
-// src/armed.ts
-function assertSentryArmed(Sentry3, options = {}) {
-  const { throwOnMissing = false } = options;
-  const dsn = Sentry3.getClient()?.getDsn();
-  if (dsn) return true;
-  const message = "[sentry-config] Sentry is NOT armed: getClient().getDsn() is empty. Errors will be silently dropped. Check SENTRY_DSN / Sentry.init in this runtime.";
-  if (throwOnMissing) {
-    console.error(message);
-    throw new Error(message);
-  }
-  console.error(message);
-  return false;
-}
-
-export { DEFAULT_DENY_URLS, DEFAULT_IGNORED_ERRORS, REDACTED, SENTRY_ENABLED, SENTRY_ENVIRONMENT, SENTRY_PROFILES_SAMPLE_RATE, SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE, SENTRY_REPLAYS_SESSION_SAMPLE_RATE, SENTRY_TRACES_SAMPLE_RATE, SENTRY_WEBVITAL_SAMPLE_RATE, assertSentryArmed, clearSentryUser, createSentryBeforeSend, createSentryTrpcMiddleware, createTracesSampler, createTrpcSentryOnError, isBot, isSensitive, redact, scrubHeaders, setSentryUser, shouldReportTrpcError, withCronMonitor };
-//# sourceMappingURL=index.js.map
-//# sourceMappingURL=index.js.map
+export { initSentryClient };
+//# sourceMappingURL=client-lazy.js.map
+//# sourceMappingURL=client-lazy.js.map

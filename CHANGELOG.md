@@ -7,22 +7,32 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- **`replay: "lazy"` on `initSentryClient`** — Replay is attached after first
-  paint (idle-after-`load`), or immediately if an error is captured before
-  that, from a separate async chunk. `replaysSessionSampleRate` /
-  `replaysOnErrorSampleRate` are **unchanged** (10% / 100%): the integration
-  reads them from the client options whenever it is set up, so error replays
-  stay armed.
-  Honest caveat, documented in the code: an error thrown **before** the attach
-  (the `[init → first paint]` window) carries no replay — Replay buffers the
-  seconds *preceding* an error. Keep `replay: true` for boot-time errors.
-- **`NEXT_PUBLIC_SENTRY_REPLAY_MODE=lazy`** — the build-time switch that
-  actually removes the bytes. It flips the default mode to `"lazy"` and, since
-  Next inlines `NEXT_PUBLIC_*` literals into browser modules (node_modules
-  included), makes the eager `Sentry.replayIntegration` branch statically dead
-  so the bundler tree-shakes `@sentry-internal/replay` out of the initial
-  chunk. Without it, `"lazy"` still defers the *work* but the bytes stay — a
-  bundler cannot know which mode you pass at runtime. Numbers in the PR.
+- **New entry point `@groupe-j/sentry-config/client-lazy`** — same
+  `initSentryClient`, same options, but Session Replay is fetched from the
+  Sentry CDN after first paint (or on the first captured error) through the
+  SDK's own `lazyLoadIntegration`, instead of being bundled. rrweb is absent
+  from the initial chunk **by construction**, on any bundler. Measured with
+  esbuild (minified, `@sentry/nextjs` 10.65, browser condition):
+
+  ```
+  /client      replay:true    292.0 KB raw /  97.4 KB gz   rrweb IN
+  /client      replay:false   292.0 KB raw /  97.4 KB gz   rrweb IN   (the trap)
+  /client-lazy replay:"lazy"  167.7 KB raw /  57.7 KB gz   rrweb OUT
+  saved                       124.3 KB raw /  39.7 KB gz
+  ```
+
+  `replaysSessionSampleRate` / `replaysOnErrorSampleRate` are **unchanged**
+  (10% / 100%): the integration reads them off the client options whenever it
+  is set up, so error replays stay armed. Honest caveat: Replay records the
+  seconds *preceding* an error from a rolling buffer that only exists once the
+  integration is attached, so an error thrown in the `[init → first paint]`
+  window gets no run-up. Keep `/client` + `replay: true` for boot-time errors.
+
+  New options for this path: `replayCdnBaseUrl` (self-host the bundle) and
+  `replayScriptNonce` (strict `script-src 'nonce-…'` CSP). **Adopting it
+  requires allowing `browser.sentry-cdn.com` in `script-src`** — and in
+  `connect-src` too if the app has a service worker.
+
 - **`SENTRY_WEBVITAL_SAMPLE_RATE`** (default `1.0`, env override
   `NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE`) and a second argument on
   `createTracesSampler(defaultRate, webVitalRate)`.
@@ -39,6 +49,7 @@ This project follows [Semantic Versioning](https://semver.org/).
      selector** (`htmlTreeAsString`, e.g. `div#root > div.map`), so any
      interaction whose deepest CSS class ends in `.map` / `.css` / `.js` was
      dropped outright — a live hazard on our map-heavy apps.
+
   Web-vital spans are now matched first (by `sentry.origin`
   `auto.http.browser.*` / `sentry.op` `ui.interaction.*`) and sampled at
   `SENTRY_WEBVITAL_SAMPLE_RATE`.
@@ -52,10 +63,17 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ### Notes
 
-- 🪤 `replay: false` remains a trap and is now documented as such: it saves
-  **zero bytes** (the `Sentry.replayIntegration` reference in the eager branch
-  is static, so bundlers ship `@sentry-internal/replay` either way) and it sets
-  `replaysOnErrorSampleRate` to `0`. Use `"lazy"` for bundle size.
+- **No breaking change.** `@groupe-j/sentry-config/client` keeps its exact
+  behaviour, API and byte size. Consumers opt into the saving by changing one
+  import line.
+- 🪤 `replay: false` remains a trap on `/client` and is now documented as such:
+  it saves **zero bytes** (the `Sentry.replayIntegration` reference is static,
+  so bundlers ship `@sentry-internal/replay` either way) and it sets
+  `replaysOnErrorSampleRate` to `0`.
+- A local `import()` of a module that references `Sentry.replayIntegration`
+  does **not** move the bytes — measured, rrweb still lands in the initial
+  chunk because the SDK barrel is reachable from both graphs. See
+  `DECISIONS.md` §14 for the full measurement.
 - `bundleSizeOptimizations` of `@sentry/nextjs` is a **no-op under Turbopack**
   (verified byte-identical SDK chunk on j-element with and without it) — do not
   count on it to drop Replay/tracing bytes.

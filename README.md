@@ -88,51 +88,88 @@ initSentryClient({
 });
 ```
 
-> On Next 15+/16 the client init file is **`instrumentation-client.ts`** at the
-> project root. A leftover `sentry.client.config.ts` is no longer loaded — the
-> browser SDK then never boots and the project reports **zero pageloads**.
+> ⚠️ **Put this in `instrumentation-client.ts`, not `sentry.client.config.ts`.**
+> `sentry.client.config.ts` is injected only by the **webpack** path of
+> `@sentry/nextjs`. A Next 16 app builds with **Turbopack**, which never injects
+> it — so `initSentryClient` is never called, the browser SDK never boots, and
+> the project reports **zero pageloads and zero browser errors**, silently.
+> Nothing in this package can detect that from the inside: code that is never
+> imported cannot warn you. The symptom to watch for is a Sentry project with
+> server events but no `pageload` transactions.
+>
+> If you *are* initialised and want to be sure the SDK is armed (real DSN, not a
+> no-op client), call `assertSentryArmed(Sentry)` right after init — see below.
 
-### Replay: `true` | `"lazy"` | `false`, and how to actually drop the bytes
+### Replay: eager or lazy — and how to actually drop the bytes
 
-| Mode | Replay bytes in the initial chunk | Session replay | Replay on error |
-|------|-----------------------------------|----------------|-----------------|
-| `true` (default) | bundled | 10% prod | 100%, from init |
-| `"lazy"` | bundled *unless the build opts in* (below) | 10% prod | 100%, **from first paint** |
-| `false` | ⚠️ **still bundled** | 0 | 0 |
+Session Replay (rrweb) is **~124 KB raw / ~40 KB gzip** of your initial chunk,
+on every page. There are two entry points; they take the same options and
+export the same `initSentryClient`, so switching is a one-line import change.
 
-**To get the bytes out, set the build-time env var** (and nothing else):
+| Import | Replay bytes in the initial chunk | Session replay | Replay on error |
+|--------|-----------------------------------|----------------|-----------------|
+| `…/client` (default, `replay: true`) | **bundled** | 10% prod | 100%, from init |
+| `…/client` with `replay: false` | ⚠️ **still bundled** | 0 | **0** |
+| `…/client-lazy` (default `replay: "lazy"`) | **absent** | 10% prod | 100%, from first paint |
 
-```bash
-NEXT_PUBLIC_SENTRY_REPLAY_MODE=lazy
+Measured with esbuild (minified, `@sentry/nextjs` 10.65, browser condition) on
+a minimal consumer:
+
+```
+/client      replay:true    292.0 KB raw /  97.4 KB gz   rrweb IN
+/client      replay:false   292.0 KB raw /  97.4 KB gz   rrweb IN   ← the trap
+/client-lazy replay:"lazy"  167.7 KB raw /  57.7 KB gz   rrweb OUT
+------------------------------------------------------------------
+saved                       124.3 KB raw /  39.7 KB gz
 ```
 
-It flips the default mode to `"lazy"` *and* — because Next inlines
-`NEXT_PUBLIC_*` literals into the browser bundle — makes the eager
-`Sentry.replayIntegration` branch statically dead, so the bundler moves
-`@sentry-internal/replay` into an async chunk. No code change needed in the app;
-an app that does not set it keeps today's bytes and today's behaviour exactly.
-
 ```ts
-// optional: force the mode per call, regardless of the env var
-initSentryClient({ app: 'mega-hote', replay: 'lazy' });
+// Drop the bytes: change the import, nothing else.
+import { initSentryClient } from '@groupe-j/sentry-config/client-lazy';
+
+initSentryClient({ app: 'mega-hote' });
 ```
 
 🪤 **`replay: false` is a trap.** It saves **zero bytes** — the
-`Sentry.replayIntegration` reference is static, so bundlers (webpack *and*
-Turbopack) ship `@sentry-internal/replay` either way — and it silently sets
-`replaysOnErrorSampleRate` to `0`. You lose the error replays and keep the
-weight. Same reason `"lazy"` alone cannot shrink the bundle: a bundler has no
-idea which mode you will pass at runtime. Only the build-time var can delete
-that branch.
+`Sentry.replayIntegration` reference on the `/client` entry is static, so
+bundlers (webpack *and* Turbopack) ship `@sentry-internal/replay` either way —
+and it silently sets `replaysOnErrorSampleRate` to `0`. You lose every error
+replay and keep every byte. If you want the bytes gone, use `/client-lazy`; if
+you want Replay gone for privacy reasons, `false` is correct and the wasted
+weight is the price.
 
-`"lazy"` attaches Replay once the page is idle after `load`, or immediately if
-an error is captured first. The honest caveat: Replay buffers the seconds
-*preceding* an error, so an error thrown **before** the attach (the
-`[init → first paint]` window) carries no replay. Keep `replay: true` (and no
-env var) if boot-time errors are what you are hunting.
+#### What `/client-lazy` costs you
 
-> `bundleSizeOptimizations` from `@sentry/nextjs` does **not** help here: it is
-> a **no-op under Turbopack** (verified byte-identical SDK chunk on j-element).
+It uses the SDK's own `lazyLoadIntegration`, which injects
+`<script src="https://browser.sentry-cdn.com/<version>/replay.min.js">` after
+first paint (or on the first captured error). That means:
+
+1. **CSP** — `script-src` must allow that origin. Pass `replayScriptNonce` if
+   you run `script-src 'nonce-…'`. If the app has a service worker
+   (Serwist/Workbox), the SW may re-fetch that script through the Fetch API, in
+   which case the origin is **also** needed in `connect-src`.
+2. **Content blockers** — `browser.sentry-cdn.com` is on common blocklists, and
+   `tunnel` does **not** help (it tunnels *events*, not the script). On failure
+   the page is unaffected and a breadcrumb explains why the next event has no
+   replay. Self-host with `replayCdnBaseUrl` if that matters to you.
+3. **No SRI** — the SDK cannot know the hash ahead of time, so the tag carries
+   `crossorigin="anonymous"` but no `integrity`. Eager Replay ships the same
+   code pinned by your lockfile instead.
+4. **Boot-time errors have no run-up** — Replay records the seconds *preceding*
+   an error from a rolling buffer that only exists once the integration is
+   attached. `replaysOnErrorSampleRate` stays at `1.0` and is honest for every
+   error after attach (the overwhelming majority); errors thrown in the
+   `[init → first paint]` window get no run-up. Stay on `/client` with
+   `replay: true` if boot-time errors are what you are hunting.
+
+> A local `import()` of a module that references `Sentry.replayIntegration`
+> does **not** work — measured: rrweb still lands in the initial chunk, because
+> the SDK barrel is reachable from both graphs and chunk assignment hoists it.
+> See `DECISIONS.md` §14.
+
+> `bundleSizeOptimizations` from `@sentry/nextjs` does **not** help either: it
+> is a **no-op under Turbopack** (verified byte-identical SDK chunk on
+> j-element).
 
 ### `sentry.server.config.ts`
 

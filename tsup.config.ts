@@ -6,16 +6,18 @@ export default defineConfig({
     client: "src/client.ts",
     server: "src/server.ts",
     edge: "src/edge.ts",
-    // Own chunk on purpose: `client.ts` only reaches it through a dynamic
-    // import, so the Replay bytes stay out of the consumer's initial chunk.
-    "replay-lazy": "src/replay-lazy.ts",
+    // Separate entry ON PURPOSE. It is the only client entry that never
+    // references `Sentry.replayIntegration`, which is what lets a consumer's
+    // bundler drop rrweb from the initial chunk. Keeping it a distinct entry
+    // (rather than a branch inside `client.ts`) is what makes that property
+    // static and therefore verifiable.
+    "client-lazy": "src/client-lazy.ts",
   },
   format: ["esm", "cjs"],
   dts: true,
-  // Required for the dynamic `import("./replay-lazy.js")` to survive as a real
-  // dynamic import in the ESM output (with splitting off, esbuild inlines it
-  // and the lazy mode silently degrades to the eager one).
-  splitting: true,
+  // Keep splitting OFF: each entry must be self-contained so that importing
+  // `/client-lazy` cannot drag in a shared chunk that mentions Replay.
+  splitting: false,
   sourcemap: true,
   clean: true,
   external: ["@sentry/nextjs", "@sentry/node", "@sentry/browser"],

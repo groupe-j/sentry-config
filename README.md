@@ -83,10 +83,56 @@ import { initSentryClient } from '@groupe-j/sentry-config/client';
 
 initSentryClient({
   app: 'mega-hote',
-  // Optional: PDPA / cookie consent gate
+  // Optional: PDPA / cookie consent gate — evaluated ONCE, at init.
   enabled: () => hasUserConsent(),
 });
 ```
+
+> On Next 15+/16 the client init file is **`instrumentation-client.ts`** at the
+> project root. A leftover `sentry.client.config.ts` is no longer loaded — the
+> browser SDK then never boots and the project reports **zero pageloads**.
+
+### Replay: `true` | `"lazy"` | `false`, and how to actually drop the bytes
+
+| Mode | Replay bytes in the initial chunk | Session replay | Replay on error |
+|------|-----------------------------------|----------------|-----------------|
+| `true` (default) | bundled | 10% prod | 100%, from init |
+| `"lazy"` | bundled *unless the build opts in* (below) | 10% prod | 100%, **from first paint** |
+| `false` | ⚠️ **still bundled** | 0 | 0 |
+
+**To get the bytes out, set the build-time env var** (and nothing else):
+
+```bash
+NEXT_PUBLIC_SENTRY_REPLAY_MODE=lazy
+```
+
+It flips the default mode to `"lazy"` *and* — because Next inlines
+`NEXT_PUBLIC_*` literals into the browser bundle — makes the eager
+`Sentry.replayIntegration` branch statically dead, so the bundler moves
+`@sentry-internal/replay` into an async chunk. No code change needed in the app;
+an app that does not set it keeps today's bytes and today's behaviour exactly.
+
+```ts
+// optional: force the mode per call, regardless of the env var
+initSentryClient({ app: 'mega-hote', replay: 'lazy' });
+```
+
+🪤 **`replay: false` is a trap.** It saves **zero bytes** — the
+`Sentry.replayIntegration` reference is static, so bundlers (webpack *and*
+Turbopack) ship `@sentry-internal/replay` either way — and it silently sets
+`replaysOnErrorSampleRate` to `0`. You lose the error replays and keep the
+weight. Same reason `"lazy"` alone cannot shrink the bundle: a bundler has no
+idea which mode you will pass at runtime. Only the build-time var can delete
+that branch.
+
+`"lazy"` attaches Replay once the page is idle after `load`, or immediately if
+an error is captured first. The honest caveat: Replay buffers the seconds
+*preceding* an error, so an error thrown **before** the attach (the
+`[init → first paint]` window) carries no replay. Keep `replay: true` (and no
+env var) if boot-time errors are what you are hunting.
+
+> `bundleSizeOptimizations` from `@sentry/nextjs` does **not** help here: it is
+> a **no-op under Turbopack** (verified byte-identical SDK chunk on j-element).
 
 ### `sentry.server.config.ts`
 
@@ -248,6 +294,19 @@ Sentry.init({
 
 If you omit the argument, it defaults to `SENTRY_TRACES_SAMPLE_RATE` (10% prod / 100% dev — test environments send 0 events because `SENTRY_ENABLED` is `false`, not because the sampler returns 0).
 
+The second argument is the **web-vital rate** (default `1.0`, override with
+`NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE`). Since SDK 8.x, **INP is emitted as
+a standalone span**, one per page lifetime, sampled by this very
+`tracesSampler`. At the 10% traces rate a low-traffic site collects
+approximately zero INP samples — which is why INP was empty on all 13 Sentry
+projects while LCP/CLS/FCP/TTFB (carried by the pageload transaction) were
+fine. INP is a Google ranking signal, so we collect it at 100% by default; the
+volume is one span per page, not per interaction.
+
+```ts
+createTracesSampler(0.05, 1.0); // 5% of routes, 100% of web vitals
+```
+
 ### Advanced: custom redaction
 
 ```ts
@@ -267,6 +326,8 @@ const cleaned = redact(myEvent);
 | `VERCEL_ENV` | Auto on Vercel | environment tag (fallback) |
 | `VERCEL_GIT_COMMIT_SHA` | Auto on Vercel | release tracking |
 | `NODE_ENV` | Auto | sample rates + enabled flag + environment fallback |
+| `NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE` | Optional, client | web-vital (INP) sample rate — default `1.0` |
+| `NEXT_PUBLIC_SENTRY_REPLAY_MODE` | Optional, **build-time** | `lazy` → Replay in an async chunk (see Replay section) |
 
 ## What this does NOT do
 

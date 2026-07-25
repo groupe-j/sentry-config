@@ -1,245 +1,94 @@
+import { SENTRY_ENABLED, DEFAULT_DENY_URLS, DEFAULT_IGNORED_ERRORS, SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE, SENTRY_REPLAYS_SESSION_SAMPLE_RATE, SENTRY_ENVIRONMENT, createSentryBeforeSend, createTracesSampler, SENTRY_TRACES_SAMPLE_RATE } from './chunk-RLML3U3R.js';
+import './chunk-DGUM43GV.js';
 import * as Sentry from '@sentry/nextjs';
 
-// src/client.ts
-
-// src/redaction.ts
-var SENSITIVE_KEYS = /* @__PURE__ */ new Set([
-  // Identity
-  "email",
-  "emails",
-  "phone",
-  "phonenumber",
-  "fullname",
-  "firstname",
-  "lastname",
-  "givenname",
-  "familyname",
-  "dateofbirth",
-  "dob",
-  // Government ID (Thailand, France, Luxembourg, EU)
-  "passport",
-  "passporturl",
-  "passportnumber",
-  "idcard",
-  "idcardurl",
-  "idcardnumber",
-  "nationalid",
-  "nationalidnumber",
-  "ssn",
-  "socialsecuritynumber",
-  "niss",
-  // Luxembourg
-  "nif",
-  // tax IDs
-  // Address
-  "address",
-  "streetaddress",
-  "billingaddress",
-  "shippingaddress",
-  "postalcode",
-  "zipcode",
-  // Auth + secrets
-  "password",
-  "passwordhash",
-  "secret",
-  "apikey",
-  "accesstoken",
-  "refreshtoken",
-  "sessiontoken",
-  "csrftoken",
-  // Payment
-  "cardnumber",
-  "cvv",
-  "cvc",
-  "iban",
-  "swift",
-  "bic"
-]);
-var REDACTED = "[REDACTED]";
-function isSensitive(key) {
-  const normalised = key.toLowerCase().replace(/[_-]/g, "");
-  return SENSITIVE_KEYS.has(normalised);
-}
-function redact(value, seen = /* @__PURE__ */ new WeakSet()) {
-  if (value === null || value === void 0) return value;
-  if (typeof value !== "object") return value;
-  if (seen.has(value)) return REDACTED;
-  seen.add(value);
-  if (Array.isArray(value)) {
-    return value.map((v) => redact(v, seen));
-  }
-  const result = {};
-  for (const [key, v] of Object.entries(value)) {
-    if (isSensitive(key)) {
-      result[key] = REDACTED;
-    } else {
-      result[key] = redact(v, seen);
-    }
-  }
-  return result;
-}
-var SENSITIVE_HEADERS = /* @__PURE__ */ new Set([
-  "stripe-signature",
-  "x-knock-signature",
-  "x-webhook-signature",
-  "x-vercel-signature",
-  "x-telegram-bot-api-secret-token",
-  "x-sanity-webhook-signature",
-  "authorization",
-  "proxy-authorization",
-  "cookie",
-  "set-cookie"
-]);
-function scrubHeaders(headers) {
-  const result = {};
-  for (const [key, value] of Object.entries(headers)) {
-    if (!SENSITIVE_HEADERS.has(key.toLowerCase())) {
-      result[key] = value;
-    }
-  }
-  return result;
-}
-
-// src/before-send.ts
-var EXTENSION_SCHEME = /(?:chrome|moz|safari(?:-web)?)-extension:\/\//i;
-function hasBrowserExtensionException(event) {
-  const values = event.exception?.values;
-  if (!values) return false;
-  return values.some((v) => {
-    if (EXTENSION_SCHEME.test(v.type ?? "") || EXTENSION_SCHEME.test(v.value ?? "")) {
-      return true;
-    }
-    return (v.stacktrace?.frames ?? []).some(
-      (f) => EXTENSION_SCHEME.test(f.filename ?? "") || EXTENSION_SCHEME.test(f.abs_path ?? "")
-    );
-  });
-}
-function createSentryBeforeSend(appName) {
-  return (event) => {
-    if (hasBrowserExtensionException(event)) return null;
-    const seen = /* @__PURE__ */ new WeakSet();
-    const next = {
-      ...event,
-      tags: { ...event.tags, app: appName }
-    };
-    if (event.request) {
-      next.request = {
-        ...event.request,
-        data: event.request.data === void 0 ? void 0 : redact(event.request.data, seen),
-        headers: event.request.headers ? scrubHeaders(event.request.headers) : void 0
-      };
-    }
-    if (event.breadcrumbs) {
-      next.breadcrumbs = event.breadcrumbs.map((b) => ({
-        ...b,
-        data: b.data === void 0 ? void 0 : redact(b.data, seen)
-      }));
-    }
-    if (event.extra) {
-      next.extra = redact(event.extra, seen);
-    }
-    if (event.contexts) {
-      next.contexts = redact(event.contexts, seen);
-    }
-    return next;
-  };
-}
-
-// src/ignored.ts
-var DEFAULT_IGNORED_ERRORS = [
-  // Next.js framework artifacts
-  "NEXT_NOT_FOUND",
-  "NEXT_REDIRECT",
-  "NEXT_HTTP_ERROR_FALLBACK",
-  // Network errors — almost always user side (offline, blocking extensions)
-  "AbortError",
-  "NetworkError",
-  "Failed to fetch",
-  "Load failed",
-  "Network request failed",
-  "ChunkLoadError",
-  "Loading chunk",
-  "Loading CSS chunk",
-  // Browser quirks
-  /ResizeObserver loop/i,
-  /Non-Error promise rejection captured/i,
-  /hydration/i,
-  // Browser extensions injecting code
-  "Script error.",
-  /chrome-extension/,
-  /moz-extension/,
-  /safari-extension/,
-  // User cancellations
-  "The user aborted a request",
-  "The operation was aborted"
-];
-var DEFAULT_DENY_URLS = [
-  /extensions\//i,
-  /^chrome:\/\//i,
-  /^chrome-extension:\/\//i,
-  /^moz-extension:\/\//i,
-  /^safari-extension:\/\//i,
-  /^safari-web-extension:\/\//i
-];
-
-// src/sampling.ts
-var SENTRY_TRACES_SAMPLE_RATE = process.env.NODE_ENV === "production" ? 0.1 : 1;
-process.env.NODE_ENV === "production" ? 0.1 : 1;
-var SENTRY_REPLAYS_SESSION_SAMPLE_RATE = process.env.NODE_ENV === "production" ? 0.1 : 0;
-var SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE = 1;
-var SENTRY_ENABLED = process.env.NODE_ENV !== "test";
-var SENTRY_ENVIRONMENT = process.env.SENTRY_ENVIRONMENT ?? process.env.NEXT_PUBLIC_SENTRY_ENVIRONMENT ?? process.env.VERCEL_ENV ?? process.env.NODE_ENV ?? "development";
-var SKIP_PATTERNS = [
-  /\/api\/health$/,
-  /\/api\/healthz$/,
-  /\/_next\/static\//,
-  /\/_next\/image\//,
-  /\/_next\/data\//,
-  /\.(?:ico|png|jpg|jpeg|gif|webp|svg|woff2?|ttf|map|css|js)$/
-];
-function createTracesSampler(defaultRate = SENTRY_TRACES_SAMPLE_RATE) {
-  return (ctx) => {
-    const url = ctx.transactionContext?.name ?? ctx.name ?? ctx.request?.url ?? "";
-    if (SKIP_PATTERNS.some((re) => re.test(url))) return 0;
-    return defaultRate;
-  };
-}
-
-// src/client.ts
+var REPLAY_LAZY_AT_BUILD = process.env.NEXT_PUBLIC_SENTRY_REPLAY_MODE === "lazy";
 function initSentryClient(opts) {
   const {
     app,
     dsn,
     enabled,
     ignoreErrors = [],
-    replay = true,
+    replay = REPLAY_LAZY_AT_BUILD ? "lazy" : true,
     replayMaskAllText = true,
     replayBlockAllMedia = true,
     tunnel,
     sendDefaultPii = false
   } = opts;
   const isEnabled = SENTRY_ENABLED && (enabled?.() ?? true);
+  const replayEnabled = replay !== false;
+  const replayEager = replay === true && !REPLAY_LAZY_AT_BUILD;
   Sentry.init({
     dsn: dsn ?? process.env.NEXT_PUBLIC_SENTRY_DSN,
     environment: SENTRY_ENVIRONMENT,
     release: process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ?? process.env.VERCEL_GIT_COMMIT_SHA,
     tracesSampler: createTracesSampler(SENTRY_TRACES_SAMPLE_RATE),
-    replaysSessionSampleRate: replay ? SENTRY_REPLAYS_SESSION_SAMPLE_RATE : 0,
-    replaysOnErrorSampleRate: replay ? SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE : 0,
+    // Rates stay identical between `true` and `"lazy"`: the integration reads
+    // them from the client options whenever it is set up (at init, or later).
+    replaysSessionSampleRate: replayEnabled ? SENTRY_REPLAYS_SESSION_SAMPLE_RATE : 0,
+    replaysOnErrorSampleRate: replayEnabled ? SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE : 0,
     enabled: isEnabled,
     sendDefaultPii,
     debug: false,
     ...tunnel && { tunnel },
     ignoreErrors: [...DEFAULT_IGNORED_ERRORS, ...ignoreErrors],
     denyUrls: DEFAULT_DENY_URLS,
-    integrations: replay ? [
-      Sentry.replayIntegration({
-        maskAllText: replayMaskAllText,
-        blockAllMedia: replayBlockAllMedia
-      })
-    ] : [],
+    integrations: [
+      // Explicit — do not rely on the SDK default. `enableInp: true` has been
+      // the default since SDK 8.x, but stating it here makes INP collection
+      // survive a default flip and documents that INP (a Google ranking signal
+      // since it replaced FID) is a first-class metric for us.
+      // Note: `@sentry/nextjs` re-exports its OWN browserTracingIntegration
+      // (App Router navigation instrumentation included), and a user-provided
+      // integration replaces the default of the same name — nothing is lost.
+      Sentry.browserTracingIntegration({ enableInp: true }),
+      // Static reference ON PURPOSE only in the eager branch. See ReplayMode:
+      // this is the line that keeps Replay in the initial chunk, and the
+      // `REPLAY_LAZY_AT_BUILD` guard is what lets a build delete it.
+      ...replayEager ? [
+        Sentry.replayIntegration({
+          maskAllText: replayMaskAllText,
+          blockAllMedia: replayBlockAllMedia
+        })
+      ] : []
+    ],
     beforeSend: createSentryBeforeSend(app)
   });
+  if (replayEnabled && !replayEager && isEnabled) {
+    scheduleLazyReplay({
+      maskAllText: replayMaskAllText,
+      blockAllMedia: replayBlockAllMedia
+    });
+  }
+}
+function scheduleLazyReplay(opts) {
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+  let requested = false;
+  const attach = () => {
+    if (requested) return;
+    requested = true;
+    void import('./replay-lazy.js').then((mod) => {
+      mod.attachReplayIntegration(opts);
+    }).catch(() => {
+      Sentry.addBreadcrumb({
+        category: "sentry.replay",
+        level: "warning",
+        message: "lazy replay chunk failed to load \u2014 no session replay for this page"
+      });
+    });
+  };
+  Sentry.getClient()?.on("beforeSendEvent", (event) => {
+    if (event.exception) attach();
+  });
+  const onLoaded = () => {
+    if (typeof window.requestIdleCallback === "function") {
+      window.requestIdleCallback(() => attach(), { timeout: 3e3 });
+    } else {
+      window.setTimeout(attach, 1500);
+    }
+  };
+  if (document.readyState === "complete") onLoaded();
+  else window.addEventListener("load", onLoaded, { once: true });
 }
 
 export { initSentryClient };

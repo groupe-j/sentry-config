@@ -221,6 +221,80 @@ portfolio, pas un patch dans la lib.
 
 ---
 
+## 14. Replay paresseux via `import()` d'un module dédié, pas via le CDN Sentry
+
+**Contexte** : le chunk SDK Sentry + rrweb pèse ~581 KB bruts / ~184 KB gzip et
+charge sur 100% des pages (mesuré sur jepeuxconstruire). L'option `replay: false`
+existante ne retire **aucun octet** : la référence à `Sentry.replayIntegration`
+dans `client.ts` est **statique**, donc le bundler embarque `@sentry-internal/replay`
+quoi qu'il arrive — elle met juste `replaysOnErrorSampleRate` à 0. C'est un piège :
+on perd la fonctionnalité sans gagner le poids.
+
+**Décision** : ajouter un 3e mode `replay: "lazy"` (attachement dynamique depuis
+`src/replay-lazy.ts` via `import("./replay-lazy.js")`, d'où `splitting: true` dans
+`tsup.config.ts`) **plus** un interrupteur build-time
+`NEXT_PUBLIC_SENTRY_REPLAY_MODE=lazy`. Déclencheurs runtime : idle après `load`, ou
+première erreur capturée (hook `beforeSendEvent`, observateur en lecture seule — pas
+un 2e chemin de capture).
+
+**Pourquoi un flag build-time en plus du mode runtime** : le mode seul ne peut PAS
+retirer d'octets. Tant que la branche eager (`replay === true`) référence
+statiquement `Sentry.replayIntegration` dans le même module, le bundler l'embarque —
+il ne sait pas quelle valeur sera passée à l'exécution. C'est exactement le piège de
+`replay: false`. Next inline les littéraux `NEXT_PUBLIC_*` dans **tous** les modules
+navigateur (y compris `node_modules`) : la constante `REPLAY_LAZY_AT_BUILD` devient
+`true` littéral, la branche eager devient du code mort, et Replay part dans le chunk
+async. Une app qui ne pose pas la variable garde le comportement et les octets
+d'aujourd'hui, à l'octet près — c'est ce qui rend le changement sûr pour 10 apps en
+prod.
+
+**Pourquoi pas `Sentry.lazyLoadIntegration('replayIntegration')`** (la réponse
+officielle Sentry) : elle charge le bundle depuis `browser.sentry-cdn.com`, ce qui
+(a) impose un host tiers dans la CSP `script-src` **et** `connect-src` sous service
+worker (cf. incident CSP/SW du portfolio), (b) tombe sous les bloqueurs de pub —
+alors que l'option `tunnel` de ce package existe précisément pour les contourner,
+(c) crée une dépendance réseau externe pour une fonctionnalité de debug.
+Le chunk local n'a aucun de ces inconvénients.
+
+**Limite assumée** : Replay bufferise les secondes **précédant** une erreur. Une
+erreur levée avant l'attachement (fenêtre `[init → premier paint]`) n'a donc pas de
+replay. `replaysOnErrorSampleRate` reste à `1.0` — honnête à partir de l'attachement.
+Les apps qui chassent des erreurs de boot gardent `replay: true`.
+
+**Conséquences si renversé** : un seul `import` statique de `./replay-lazy.js`
+depuis n'importe quel module du package ré-attache Replay au chunk initial et
+annule silencieusement tout le gain (aucun test ne casse — d'où l'avertissement en
+tête de `src/replay-lazy.ts`).
+
+---
+
+## 15. Les web vitals standalone (INP) ont leur propre taux d'échantillonnage
+
+**Contexte** : INP était **vide sur les 13 projets Sentry de l'org** alors que
+LCP/CLS/FCP/TTFB remontaient. Depuis le SDK 8.x, INP n'est pas une mesure attachée
+à la transaction pageload : c'est un **span standalone** (un span racine par page),
+échantillonné par notre propre `tracesSampler`. À 10% en prod, une métrique
+émise une fois par page sur des sites à faible trafic donne ~0 échantillon. Pire :
+le `name` d'un span INP est un **sélecteur DOM** (`htmlTreeAsString`), pas une URL —
+la skip-list `/\.(?:…|map|css|js)$/` supprimait donc les interactions dont la
+dernière classe CSS finit par `.map` (nos apps cartographiques), `.css` ou `.js`.
+
+**Décision** : `createTracesSampler(defaultRate, webVitalRate)` teste **d'abord**
+les attributs (`sentry.origin` `auto.http.browser.*`, `sentry.op` `ui.interaction.*`)
+et renvoie `SENTRY_WEBVITAL_SAMPLE_RATE` (défaut `1.0`, override
+`NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE`) sans jamais appliquer les patterns d'URL.
+
+**Pourquoi 1.0** : INP est un signal de classement Google (il a remplacé le FID) et
+le volume est borné à ~1 span par page ayant eu une interaction — pas par
+interaction. Sur notre trafic réel (site le plus visité : ~89 clics Bing/mois), le
+coût quota est négligeable devant l'aveuglement actuel.
+
+**Conséquences si renversé** : repasser les web vitals sur le taux `traces` (0.1)
+re-vide l'INP de tous les projets, sans aucun signal d'erreur — la panne est
+silencieuse, exactement comme elle l'a été jusqu'ici.
+
+---
+
 ## Comment ajouter une nouvelle décision
 
 Quand tu fais un choix non-évident lors d'un futur refactor :

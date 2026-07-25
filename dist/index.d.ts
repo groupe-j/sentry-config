@@ -40,7 +40,18 @@ declare function createSentryBeforeSend<E extends SentryEventLike>(appName: stri
  *
  * Why whole-word + normalization (not substring): substring would over-redact
  * `ipAddress`, `requestToken`, etc. Normalisation handles `id_card` ≡ `idCard`
- * ≡ `id-card` (all become `idcard` → match).
+ * ≡ `id-card` (all become `idcard` → match). Exact-key matching means broad
+ * entries stay narrow: `name` redacts a key literally named `name`, never
+ * `filename` / `hostname` / `username` / `appName`.
+ *
+ * Tradeoff — these three broad keys also match Sentry's own context fields:
+ * `name` → `contexts.{browser,os,device}.name` ("Chrome"/"Windows"); `description`
+ * → `contexts.trace.description` (span label, e.g. "GET /api/foo"); `location`
+ * → any library-set `location` in `extra`/breadcrumb data. All become `[REDACTED]`.
+ * Accepted, visible cost — in this lead-heavy portfolio these are high-risk PII
+ * fields, and the sibling `*.version`/`op`/`trace_id` context fields survive for
+ * debugging. Exception values/stack frames are never passed through `redact`, so
+ * error messages and filenames are unaffected.
  *
  * Why WeakSet cycle guard: Sentry events hold cycles via
  * `contexts.react.componentStack` or error.cause chains from Apollo/Prisma.
@@ -79,6 +90,21 @@ declare const SENTRY_ENABLED: boolean;
  */
 declare const SENTRY_ENVIRONMENT: string;
 /**
+ * Web-vital sample rate — INP & friends.
+ *
+ * Why it is NOT `SENTRY_TRACES_SAMPLE_RATE`: since SDK 8.x the browser SDK
+ * emits INP (and optionally CLS/LCP) as **standalone spans**, i.e. one root
+ * span per measurement, sampled through the very same `tracesSampler` as a
+ * pageload. At 10% in production, a portfolio of low-traffic sites collects
+ * ~0 INP samples — which is exactly what we observed: LCP/CLS/FCP/TTFB (which
+ * ride along the pageload transaction, one per pageview) were populated on the
+ * 13 Sentry projects while INP was empty everywhere.
+ *
+ * INP is emitted at most once per page lifetime, so 100% is cheap. Dial it
+ * down with `NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE` on a high-traffic app.
+ */
+declare const SENTRY_WEBVITAL_SAMPLE_RATE: number;
+/**
  * Loose SamplingContext shape — matches @sentry/types without coupling.
  */
 interface SamplingContextLike {
@@ -89,12 +115,23 @@ interface SamplingContextLike {
     request?: {
         url?: string;
     };
+    /** Span attributes known at sampling time (SDK 8+). */
+    attributes?: Record<string, unknown>;
 }
 /**
  * Builds a `tracesSampler` that returns 0 for low-value routes.
  * Pass to `Sentry.init({ tracesSampler: createTracesSampler(0.1) })`.
+ *
+ * Web-vital standalone spans (INP…) are handled FIRST and on their own rate.
+ * Two reasons:
+ *  1. quota: see {@link SENTRY_WEBVITAL_SAMPLE_RATE} — 10% of a once-per-page
+ *     metric is statistically nothing on our traffic;
+ *  2. correctness: the `name` of an INP span is a DOM selector, not a URL
+ *     (`htmlTreeAsString(target)`, e.g. `div#root > div.map`). Running URL
+ *     patterns on it silently drops interactions whose deepest CSS class ends
+ *     with `.map`, `.css`, `.js`… — a real hazard on our map-heavy apps.
  */
-declare function createTracesSampler(defaultRate?: number): (ctx: SamplingContextLike) => number;
+declare function createTracesSampler(defaultRate?: number, webVitalRate?: number): (ctx: SamplingContextLike) => number;
 
 /**
  * User context helpers.
@@ -403,4 +440,4 @@ interface AssertSentryArmedOptions {
  */
 declare function assertSentryArmed(Sentry: SentryArmedLike, options?: AssertSentryArmedOptions): boolean;
 
-export { type AssertSentryArmedOptions, type CronMonitorOptions, DEFAULT_DENY_URLS, DEFAULT_IGNORED_ERRORS, REDACTED, SENTRY_ENABLED, SENTRY_ENVIRONMENT, SENTRY_PROFILES_SAMPLE_RATE, SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE, SENTRY_REPLAYS_SESSION_SAMPLE_RATE, SENTRY_TRACES_SAMPLE_RATE, type SentryArmedLike, type SentryClientLike, type SentryEventLike, type SentryTrpcMiddleware, type SentryTrpcMiddlewareArguments, type SentryTrpcMiddlewareLike, type SentryTrpcMiddlewareOptions, type SentryTrpcMiddlewareResult, type SentryUserContext, type TrpcErrorLike, type TrpcErrorType, type TrpcOnErrorPayload, type TrpcSentryLike, assertSentryArmed, clearSentryUser, createSentryBeforeSend, createSentryTrpcMiddleware, createTracesSampler, createTrpcSentryOnError, isBot, isSensitive, redact, scrubHeaders, setSentryUser, shouldReportTrpcError, withCronMonitor };
+export { type AssertSentryArmedOptions, type CronMonitorOptions, DEFAULT_DENY_URLS, DEFAULT_IGNORED_ERRORS, REDACTED, SENTRY_ENABLED, SENTRY_ENVIRONMENT, SENTRY_PROFILES_SAMPLE_RATE, SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE, SENTRY_REPLAYS_SESSION_SAMPLE_RATE, SENTRY_TRACES_SAMPLE_RATE, SENTRY_WEBVITAL_SAMPLE_RATE, type SentryArmedLike, type SentryClientLike, type SentryEventLike, type SentryTrpcMiddleware, type SentryTrpcMiddlewareArguments, type SentryTrpcMiddlewareLike, type SentryTrpcMiddlewareOptions, type SentryTrpcMiddlewareResult, type SentryUserContext, type TrpcErrorLike, type TrpcErrorType, type TrpcOnErrorPayload, type TrpcSentryLike, assertSentryArmed, clearSentryUser, createSentryBeforeSend, createSentryTrpcMiddleware, createTracesSampler, createTrpcSentryOnError, isBot, isSensitive, redact, scrubHeaders, setSentryUser, shouldReportTrpcError, withCronMonitor };

@@ -29,6 +29,19 @@ updates:
       day: "monday"
       time: "06:00"
       timezone: "Europe/Paris"
+    # Contrepartie OBLIGATOIRE de l'auto-merge minor/patch, installé par le même
+    # `gjdc setup` que ce fichier : sans délai, une dépendance compromise
+    # publiée il y a dix minutes est mergée sans qu'aucun humain ne la voie —
+    # le vecteur des compromissions npm récentes. Plancher 7 jours (plus strict
+    # que le défaut GitHub) ; ne pas descendre `semver-patch-days` en dessous :
+    # une compromission se déguise volontiers en patch, précisément parce que
+    # c'est la mise à jour qu'on relit le moins.
+    # Le cooldown ne s'applique JAMAIS aux mises à jour de sécurité — un
+    # correctif de faille n'est donc pas retardé.
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+      semver-minor-days: 7
     open-pull-requests-limit: 10
     commit-message:
       prefix: "chore(deps)"
@@ -80,6 +93,13 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
+    # `github-actions` ne supporte que `default-days` (pas la ventilation
+    # major/minor/patch). 7 jours : une action compromise s'exécute avec les
+    # credentials du dépôt et l'accès aux secrets — rayon d'explosion supérieur
+    # à celui d'un paquet npm. L'écosystème étant en cadence mensuelle, le
+    # délai ne coûte rien.
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     commit-message:
       prefix: "chore(ci)"

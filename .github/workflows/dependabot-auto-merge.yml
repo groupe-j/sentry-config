@@ -46,6 +46,9 @@ concurrency:
 jobs:
   # ── 1. Contexte pull_request : détecte le semver et étiquette minor/patch ──
   label:
+    # ⚠️ Ce `name:` est le nom du CHECK RUN interrogé par le job `merge`
+    # (env `LABEL_JOB`) pour vérifier que le verdict semver de ce SHA a bien été
+    # rendu. Les deux doivent rester synchronisés.
     name: Label auto-mergeable Dependabot PRs
     if: >-
       github.event_name == 'pull_request' &&
@@ -58,6 +61,13 @@ jobs:
     steps:
       - name: Fetch Dependabot metadata
         id: meta
+        # Épinglé sur le SHA complet, jamais sur le tag : un tag est mutable et
+        # peut être re-pointé silencieusement par son propriétaire (précédents
+        # `tj-actions/changed-files`, `trivy-action`). Cette action s'exécute
+        # avec le token du dépôt — le rayon d'explosion d'une reprise de tag est
+        # maximal. Règle Semgrep `github-actions-mutable-action-tag`. Le
+        # commentaire de fin de ligne porte la version lisible : c'est la forme
+        # que Dependabot sait mettre à jour (il réécrit SHA + commentaire).
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98  # v3.1.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -75,6 +85,50 @@ jobs:
         env:
           LABEL: dependabot-auto-merge-ok
           REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ⚠️ Cette etape RETIRE le label. Elle est indispensable parce que
+      # l'etiquetage ci-dessous n'AJOUTE jamais qu'il ne retire.
+      #
+      # Le scenario : Dependabot met a jour une PR EN PLACE (evenement
+      # `synchronize`). Une PR etiquetee minor/patch peut ainsi devenir MAJEURE
+      # sur la meme branche. Sans retrait, le label survit, et le job `merge`
+      # le lit comme une autorisation — il auto-merge alors une majeure, contre
+      # l'invariant annonce par ce workflow.
+      #
+      # ⚠️ PAS de `|| true` / `|| echo` ici. Un tel filet est INCONDITIONNEL :
+      # il avale aussi bien le cas benin « label absent » que l'echec d'auth,
+      # l'erreur d'API, le depassement de quota ou la coupure reseau. L'etape
+      # passerait au VERT en laissant le label perime en place, et le job
+      # `merge` merge alors la majeure — c'est un fail-open, la classe de
+      # defaut exacte que cette etape est censee fermer. On distingue donc
+      # explicitement le cas « rien a retirer » (constate par une lecture) de
+      # tous les autres, qui doivent faire ECHOUER l'etape bruyamment.
+      - name: Retire le label si la PR n'est plus minor/patch
+        if: >-
+          steps.meta.outputs.update-type != 'version-update:semver-minor' &&
+          steps.meta.outputs.update-type != 'version-update:semver-patch'
+        run: |
+          set -euo pipefail
+
+          # Lecture d'abord : si `gh pr view` echoue (auth/API/reseau), `set -e`
+          # fait echouer l'etape au lieu de conclure « absent, rien a faire ».
+          labels_json=$(gh pr view "$PR_URL" --json labels)
+          has_label=$(echo "$labels_json" | jq -r --arg L "$LABEL" \
+            'any(.labels[]?; .name == $L)')
+
+          if [ "$has_label" != "true" ]; then
+            echo "Label '$LABEL' absent (verifie) — rien a retirer."
+            exit 0
+          fi
+
+          # Le label EST present sur une PR qui n'est plus minor/patch : le
+          # retrait doit reussir. Tout code de retour non nul propage.
+          gh pr edit "$PR_URL" --remove-label "$LABEL"
+          echo "Label '$LABEL' retire : update-type=${{ steps.meta.outputs.update-type }}"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          LABEL: dependabot-auto-merge-ok
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Label minor + patch (never major)
@@ -106,6 +160,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      checks: read # lecture des check runs du SHA testé (verdict du job `label`)
     steps:
       - name: Resolve PR, gate on author + label + tested SHA, then merge
         run: |
@@ -125,25 +180,48 @@ jobs:
           # garde-auteur (ne merge jamais que les PRs de Dependabot lui-même) ET
           # protège contre une PR de fork qui réutiliserait le même nom de
           # branche pour se glisser en tête de liste.
-          entry=$(echo "$pr_json" | jq -c '[.[] | select(.author.login == "dependabot[bot]")] | .[0] // empty')
+          # ⚠️ Le format de `author.login` a DÉJÀ changé une fois : `gh pr list`
+          # renvoyait `dependabot[bot]`, il renvoie `app/dependabot` (gh 2.86).
+          # Le filtre en dur sur `dependabot[bot]` n'a donc jamais rien matché —
+          # le job sortait en `exit 0` « rien a merger », run VERT, et aucune PR
+          # n'a été auto-mergée depuis le déploiement (2026-07-06 → 2026-07-25,
+          # 44 minor/patch accumulées). On teste donc les deux formats, ancré,
+          # et on exige `is_bot` — un compte humain nommé « dependabot » ne
+          # passe pas.
+          entry=$(echo "$pr_json" | jq -c '
+            [ .[]
+              | select(.author.is_bot == true)
+              | select(.author.login | test("^(app/)?dependabot(\\[bot\\])?$"))
+            ] | .[0] // empty')
+
           if [ -z "$entry" ]; then
+            total=$(echo "$pr_json" | jq 'length')
+            bot_seen=$(echo "$pr_json" | jq '[.[] | select(.author.is_bot == true)] | length')
+            case "$HEAD_BRANCH" in dependabot/*) dep_branch=1 ;; *) dep_branch=0 ;; esac
+
+            # Échec BRUYANT, mais UNIQUEMENT sur le vrai mode de panne : une
+            # branche `dependabot/*`, ou un auteur bot qui n'a pas matché. C'est
+            # la signature d'un drift de format — celui qui a rendu ce workflow
+            # inerte 3 semaines sous un `exit 0` silencieux.
+            #
+            # ⚠️ NE PAS élargir cette condition. Le job `merge` se déclenche sur
+            # CHAQUE CI verte, PRs humaines comprises : un `exit 1` inconditionnel
+            # ferait rougir ~85 % des runs (mesuré : 28 branches humaines contre 5
+            # branches dependabot sur 33 runs, JELEMENT, 19 jours), avec un message
+            # mensonger. Le bruit serait ignoré sous 48 h — et on retomberait
+            # exactement dans le mode d'échec que ce correctif ferme.
+            if [ "$total" -gt 0 ] && { [ "$dep_branch" = 1 ] || [ "$bot_seen" -gt 0 ]; }; then
+              echo "::error::$total PR(s) sur '$HEAD_BRANCH' mais aucune ne passe le garde auteur."
+              echo "Auteurs vus : $(echo "$pr_json" | jq -c '[.[].author]')"
+              echo "Le format de author.login a probablement changé — corriger le test ci-dessus."
+              exit 1
+            fi
             echo "Aucune PR Dependabot ouverte pour la branche '$HEAD_BRANCH' — rien a merger."
             exit 0
           fi
 
           number=$(echo "$entry" | jq -r '.number')
           head_oid=$(echo "$entry" | jq -r '.headRefOid')
-          has_label=$(echo "$entry" | jq -r --arg L "$LABEL" 'any(.labels[]?; .name == $L)')
-
-          # Garde semver : le label n'est posé que sur minor/patch par le job
-          # `label`. Une major (ou une PR pas encore étiquetée) → pas de merge.
-          # (Résidu de confiance : quiconque a le write access peut poser ce
-          # label à la main — mais il pourrait aussi merger la PR à la main ;
-          # hors modèle de menace.)
-          if [ "$has_label" != "true" ]; then
-            echo "PR #$number : label '$LABEL' absent (major ou non etiquetee) — skip."
-            exit 0
-          fi
 
           # Garde anti-stale (le cœur du fix GRO-625) : la CI a validé HEAD_SHA.
           # Si Dependabot a rebase/force-push depuis (auto-rebase quand la base
@@ -154,7 +232,85 @@ jobs:
             exit 0
           fi
 
-          echo "CI verte sur $HEAD_SHA + '$LABEL' + auteur Dependabot → merge de la PR #$number."
+          # ── Autorisation SPÉCIFIQUE AU SHA ────────────────────────────────
+          # Le label est un état de PR, pas un état de commit : lu seul, il peut
+          # dater d'un SHA antérieur. Sur un `synchronize` qui fait passer une PR
+          # déjà étiquetée en MAJEURE, le job `label` (clé de concurrency =
+          # numéro de PR) et ce job (clé = branche head) ne se sérialisent PAS
+          # entre eux : une CI rapide ou en cache peut amener ici pendant que le
+          # retrait du label est encore en file. On lirait alors un label périmé
+          # sur un SHA majeur fraîchement testé — et on mergerait la majeure.
+          #
+          # On exige donc que le job `label` de CE SHA ait CONCLU en succès
+          # avant de lire le label. Le check run porte le nom du job et est
+          # attaché au head_sha de l'événement `pull_request` — le même SHA que
+          # celui testé par la CI.
+          verdict=""
+          for attempt in $(seq 1 30); do
+            verdict=$(gh api \
+              "repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=100" \
+              --jq '.check_runs' \
+              | jq -r --arg N "$LABEL_JOB" \
+                '[ .[] | select(.name == $N) ] | .[0]
+                 | if . == null then "absent"
+                   elif .status != "completed" then "pending"
+                   else (.conclusion // "unknown") end')
+            [ "$verdict" = "pending" ] || break
+            echo "  … job '$LABEL_JOB' encore en cours sur $HEAD_SHA (tentative $attempt/30)"
+            sleep 10
+          done
+
+          case "$verdict" in
+            success) ;;
+            skipped)
+              # Le job `label` ne tourne que si l'acteur est Dependabot. Skippé
+              # ⇒ ce SHA a été poussé par quelqu'un d'autre : aucun verdict
+              # semver n'a été rendu pour lui, le label éventuellement présent
+              # vient d'un SHA antérieur. On ne merge pas.
+              echo "::warning::PR #$number : job '$LABEL_JOB' skippe sur $HEAD_SHA — aucun verdict semver pour ce commit, pas de merge."
+              exit 0
+              ;;
+            pending)
+              echo "::error::PR #$number : job '$LABEL_JOB' toujours en cours sur $HEAD_SHA apres 5 min. Le label ne peut pas etre considere comme a jour — pas de merge."
+              exit 1
+              ;;
+            *)
+              # `absent` (le workflow de label ne s'est pas declenche sur ce SHA,
+              # ou son nom de job a change) ou `failure`/`cancelled`/... :
+              # l'autorisation n'est pas verifiable. Echec BRUYANT — on est deja
+              # a l'interieur du garde auteur Dependabot, donc pas de bruit sur
+              # les PRs humaines, et un skip silencieux ici rejouerait
+              # exactement l'inertie de 3 semaines decrite plus haut.
+              echo "::error::PR #$number : job '$LABEL_JOB' introuvable ou en echec sur $HEAD_SHA (verdict='$verdict') — autorisation non verifiable, pas de merge."
+              echo "Checks vus : $(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=100" --jq '[.check_runs[].name] | unique | join(", ")')"
+              exit 1
+              ;;
+          esac
+
+          # Relecture APRÈS le verdict : `pr_json` a été capturé avant l'attente
+          # et peut être périmé. On revalide aussi le head — il a pu bouger
+          # pendant l'attente.
+          fresh=$(gh pr view "$number" --repo "$REPO" --json labels,headRefOid)
+          head_oid=$(echo "$fresh" | jq -r '.headRefOid')
+          has_label=$(echo "$fresh" | jq -r --arg L "$LABEL" 'any(.labels[]?; .name == $L)')
+
+          if [ "$head_oid" != "$HEAD_SHA" ]; then
+            echo "PR #$number : head '$head_oid' != '$HEAD_SHA' (a bouge pendant l'attente) — skip."
+            exit 0
+          fi
+
+          # Garde semver : le label n'est posé que sur minor/patch par le job
+          # `label`, et il vient d'être confirmé à jour POUR CE SHA. Une major
+          # (ou une PR pas encore étiquetée) → pas de merge.
+          # (Résidu de confiance : quiconque a le write access peut poser ce
+          # label à la main — mais il pourrait aussi merger la PR à la main ;
+          # hors modèle de menace.)
+          if [ "$has_label" != "true" ]; then
+            echo "PR #$number : label '$LABEL' absent (major ou non etiquetee) — skip."
+            exit 0
+          fi
+
+          echo "CI verte sur $HEAD_SHA + '$LABEL' verifie pour ce SHA + auteur Dependabot → merge de la PR #$number."
           # --match-head-commit : garde atomique finale contre une course entre
           # le check ci-dessus et l'appel merge (échoue proprement si le head
           # bouge dans l'intervalle, plutôt que de merger un commit non testé).
@@ -164,4 +320,9 @@ jobs:
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           LABEL: dependabot-auto-merge-ok
+          # ⚠️ DOIT rester identique au `name:` du job `label` ci-dessus : c'est
+          # le nom du check run qu'on interroge pour savoir si le verdict semver
+          # de CE SHA a été rendu. Renommer l'un sans l'autre rend le job `merge`
+          # rouge (`absent`) — bruyant, donc visible, par construction.
+          LABEL_JOB: Label auto-mergeable Dependabot PRs
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

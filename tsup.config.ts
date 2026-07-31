@@ -12,6 +12,11 @@ export default defineConfig({
     // (rather than a branch inside `client.ts`) is what makes that property
     // static and therefore verifiable.
     "client-lazy": "src/client-lazy.ts",
+    // Standalone entry so `assertSentryArmed` is reachable WITHOUT the barrel.
+    // The barrel drags `Sentry.withMonitor` / `Sentry.trpcMiddleware` — absent
+    // from the browser build of `@sentry/nextjs` — so importing it from a
+    // client module breaks the build. `src/armed.ts` imports nothing at all.
+    armed: "src/armed.ts",
   },
   format: ["esm", "cjs"],
   dts: true,

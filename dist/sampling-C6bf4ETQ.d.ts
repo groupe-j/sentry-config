@@ -12,13 +12,11 @@
  * {@link SENTRY_BROWSER_TRACES_SAMPLE_RATE} — because the two tiers differ by
  * two orders of magnitude in volume and 10% is calibrated for the loud one.
  */
-
-export const SENTRY_TRACES_SAMPLE_RATE = process.env.NODE_ENV === "production" ? 0.1 : 1.0;
-export const SENTRY_PROFILES_SAMPLE_RATE = process.env.NODE_ENV === "production" ? 0.1 : 1.0;
-export const SENTRY_REPLAYS_SESSION_SAMPLE_RATE = process.env.NODE_ENV === "production" ? 0.1 : 0;
-export const SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE = 1.0;
-export const SENTRY_ENABLED = process.env.NODE_ENV !== "test";
-
+declare const SENTRY_TRACES_SAMPLE_RATE: number;
+declare const SENTRY_PROFILES_SAMPLE_RATE: number;
+declare const SENTRY_REPLAYS_SESSION_SAMPLE_RATE: number;
+declare const SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE = 1;
+declare const SENTRY_ENABLED: boolean;
 /**
  * Browser traces sample rate — **100% in production**, on purpose.
  *
@@ -77,12 +75,7 @@ export const SENTRY_ENABLED = process.env.NODE_ENV !== "test";
  * `initSentryClient({ tracesSampleRate })` > `NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE`
  * > this default.
  */
-export const SENTRY_BROWSER_TRACES_SAMPLE_RATE = parseRate(
-  process.env.NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE,
-  1.0,
-  "NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE",
-);
-
+declare const SENTRY_BROWSER_TRACES_SAMPLE_RATE: number;
 /**
  * Explicit override wins over the Vercel/Node defaults.
  *
@@ -93,13 +86,7 @@ export const SENTRY_BROWSER_TRACES_SAMPLE_RATE = parseRate(
  * when unset, so dev/preview/prod behaviour is unchanged unless an app opts in
  * — e.g. a CI e2e run booting under `next start` that wants `environment: "ci"`.
  */
-export const SENTRY_ENVIRONMENT =
-  process.env.SENTRY_ENVIRONMENT ??
-  process.env.NEXT_PUBLIC_SENTRY_ENVIRONMENT ??
-  process.env.VERCEL_ENV ??
-  process.env.NODE_ENV ??
-  "development";
-
+declare const SENTRY_ENVIRONMENT: string;
 /**
  * Web-vital sample rate — INP & friends.
  *
@@ -114,87 +101,21 @@ export const SENTRY_ENVIRONMENT =
  * INP is emitted at most once per page lifetime, so 100% is cheap. Dial it
  * down with `NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE` on a high-traffic app.
  */
-export const SENTRY_WEBVITAL_SAMPLE_RATE = parseRate(
-  process.env.NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE ??
-    process.env.SENTRY_WEBVITAL_SAMPLE_RATE,
-  1.0,
-  "NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE",
-);
-
-function parseRate(raw: string | undefined, fallback: number, name?: string): number {
-  // A declared-but-empty env var is the common Vercel accident, and `Number("")`
-  // is `0` — which is a perfectly valid rate. Left unguarded, an empty
-  // NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE would silently set the rate to 0 and
-  // re-create the exact "INP is empty everywhere" bug this module exists to fix.
-  // Blank means "unset", and that is a legitimate state — stay silent for it.
-  if (raw === undefined || raw.trim() === "") return fallback;
-  const parsed = Number(raw);
-  if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1) return parsed;
-  // A *non-blank* value that does not parse is somebody trying to set a rate and
-  // failing. Falling back silently is the fail-open shape this module is full of
-  // warnings about: `NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE` is documented as the
-  // no-deploy way to dial an app DOWN, so an operator who types `0,2` (decimal
-  // comma) or `20%` while trying to cut volume by 5× lands on the 1.0 default
-  // instead — the exact opposite of the intent, with nothing in the logs. Same
-  // reasoning as `resolveTracesRate` in client-core.ts: say so, loudly.
-  console.error(
-    `[sentry-config] ${name ?? "sample rate"}: expected a number in [0, 1], got ${JSON.stringify(raw)}. ` +
-      `Using ${fallback} instead — the value you set is NOT in effect.`,
-  );
-  return fallback;
-}
-
+declare const SENTRY_WEBVITAL_SAMPLE_RATE: number;
 /**
  * Loose SamplingContext shape — matches @sentry/types without coupling.
  */
 interface SamplingContextLike {
-  name?: string;
-  transactionContext?: { name?: string };
-  request?: { url?: string };
-  /** Span attributes known at sampling time (SDK 8+). */
-  attributes?: Record<string, unknown>;
+    name?: string;
+    transactionContext?: {
+        name?: string;
+    };
+    request?: {
+        url?: string;
+    };
+    /** Span attributes known at sampling time (SDK 8+). */
+    attributes?: Record<string, unknown>;
 }
-
-/**
- * Standalone web-vital spans carry `sentry.origin = auto.http.browser.<vital>`.
- *
- * ⚠️ Deliberately an **allowlist**, not a `auto.http.browser.` prefix test.
- * `FetchStreamPerformance` tags its spans `auto.http.browser.stream`, and those
- * become root spans (so they reach this sampler) whenever no idle span is
- * active — i.e. any SSE / streaming request a second after pageload. A prefix
- * test would sample that traffic at the web-vital rate (100%) instead of the
- * traces rate. These three are the only web-vital origins the SDK emits
- * (`browser-utils/metrics/{inp,cls,lcp}.js`).
- */
-const WEB_VITAL_ORIGINS = new Set([
-  "auto.http.browser.inp",
-  "auto.http.browser.cls",
-  "auto.http.browser.lcp",
-]);
-
-function isWebVitalSpan(ctx: SamplingContextLike): boolean {
-  const origin = ctx.attributes?.["sentry.origin"];
-  if (typeof origin === "string" && WEB_VITAL_ORIGINS.has(origin)) return true;
-  // Fallback for INP specifically: its op is `ui.interaction.<type>`. The only
-  // other `ui.interaction.*` producer creates *child* spans of the pageload
-  // transaction, which never reach a sampler.
-  const op = ctx.attributes?.["sentry.op"];
-  return typeof op === "string" && op.startsWith("ui.interaction.");
-}
-
-/**
- * Routes that are not worth tracing (waste of quota).
- * Health probes (Grafana Synthetic Monitoring), static assets, Next.js internals.
- */
-const SKIP_PATTERNS = [
-  /\/api\/health$/,
-  /\/api\/healthz$/,
-  /\/_next\/static\//,
-  /\/_next\/image\//,
-  /\/_next\/data\//,
-  /\.(?:ico|png|jpg|jpeg|gif|webp|svg|woff2?|ttf|map|css|js)$/,
-];
-
 /**
  * Builds a `tracesSampler` that returns 0 for low-value routes.
  * Pass to `Sentry.init({ tracesSampler: createTracesSampler(0.1) })`.
@@ -208,19 +129,6 @@ const SKIP_PATTERNS = [
  *     patterns on it silently drops interactions whose deepest CSS class ends
  *     with `.map`, `.css`, `.js`… — a real hazard on our map-heavy apps.
  */
-export function createTracesSampler(
-  defaultRate: number = SENTRY_TRACES_SAMPLE_RATE,
-  webVitalRate: number = SENTRY_WEBVITAL_SAMPLE_RATE,
-) {
-  return (ctx: SamplingContextLike): number => {
-    if (isWebVitalSpan(ctx)) return webVitalRate;
+declare function createTracesSampler(defaultRate?: number, webVitalRate?: number): (ctx: SamplingContextLike) => number;
 
-    const url =
-      ctx.transactionContext?.name ??
-      ctx.name ??
-      ctx.request?.url ??
-      "";
-    if (SKIP_PATTERNS.some((re) => re.test(url))) return 0;
-    return defaultRate;
-  };
-}
+export { SENTRY_BROWSER_TRACES_SAMPLE_RATE as S, SENTRY_ENABLED as a, SENTRY_ENVIRONMENT as b, SENTRY_PROFILES_SAMPLE_RATE as c, SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE as d, SENTRY_REPLAYS_SESSION_SAMPLE_RATE as e, SENTRY_TRACES_SAMPLE_RATE as f, SENTRY_WEBVITAL_SAMPLE_RATE as g, createTracesSampler as h };

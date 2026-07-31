@@ -299,6 +299,18 @@ assertSentryArmed(Sentry, {
 Returns `true` when a DSN is present; otherwise logs a loud `console.error` and
 returns `false` (or throws when `throwOnMissing` is set).
 
+> ⚠️ **From client code, import it from `@groupe-j/sentry-config/armed`, not the
+> barrel.** The barrel also re-exports `withCronMonitor` and
+> `createSentryTrpcMiddleware`, which reach for `Sentry.withMonitor` /
+> `Sentry.trpcMiddleware` — members that do not exist in the browser build of
+> `@sentry/nextjs`. A bundler resolving them against the client condition fails
+> the build outright (businessfamily, 2026-07-31). The `/armed` subpath (added in
+> v1.0.0) imports nothing at all and is safe from every runtime:
+>
+> ```ts
+> import { assertSentryArmed } from '@groupe-j/sentry-config/armed';
+> ```
+
 ### Next 16 + Turbopack blind spot (SDK #18871)
 
 Under **Next 16 + Turbopack**, `@sentry/nextjs` **v10.32–10.34** shipped a
@@ -337,7 +349,61 @@ Sentry.init({
 });
 ```
 
-If you omit the argument, it defaults to `SENTRY_TRACES_SAMPLE_RATE` (10% prod / 100% dev — test environments send 0 events because `SENTRY_ENABLED` is `false`, not because the sampler returns 0).
+If you omit the argument, it defaults to `SENTRY_TRACES_SAMPLE_RATE` (10% prod / 100% dev — test environments send 0 events because `SENTRY_ENABLED` is `false`, not because the sampler returns 0). Note that `initSentryClient` does **not** use that constant: the browser has its own rate, see below.
+
+### Browser traces rate — 100% by default (v1.0.0)
+
+`initSentryClient` samples browser traces at `SENTRY_BROWSER_TRACES_SAMPLE_RATE`
+= **1.0 in production**. `initSentryServer` / `initSentryEdge` are unchanged at
+10%.
+
+Why the split: 10% is calibrated for the *server* tier (crons, queues,
+`http.server`); the browser tier is two orders of magnitude smaller, and 10% of
+it is nothing. Measured over 30 days to 2026-07-31, `environment:production`:
+
+| app | server txns | browser txns @0.1 | browser spans @0.1 | @1.0 |
+|---|---:|---:|---:|---:|
+| megahote-t3 | 34 875 | 8 | 435 | 4 350 |
+| jepeuxconstruire | 20 401 | 69 | 3 311 | 33 110 |
+| linegroup | 1 941 | 24 | 1 052 | 10 520 |
+| archicollab-t3 | 742 | 77 | 2 601 | 26 010 |
+| jelement | 0 | 60 | 3 664 | 36 640 |
+| coraly | 99 | 9 | 347 | 3 470 |
+
+Half the portfolio was collecting fewer than **ten** browser transactions a
+month — one every three days, from which no p75 web vital and no regression
+signal can be read. The move to 1.0 adds **~103 000 stored spans/month**
+portfolio-wide: +6% of current ingestion (1 704 224 spans/30 d) and **+2% of the
+5 000 000 spans/month reserved quota**. Replays, profiles and errors are on
+their own rates and do not move.
+
+**🔻 Come back down at ~500 pageloads/day**, per app:
+
+```ts
+initSentryClient({ app: 'busy-app', tracesSampleRate: 0.2 });
+```
+
+or, without a deploy, `NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE=0.2`. The trigger
+is derived, not arbitrary: ~100 sampled pageloads/day is where a daily p75 web
+vital stops jittering, and `0.2 × 500 = 100`. Below 500/day, dialling down saves
+tens of thousands of spans on a five-million quota and costs the only signal the
+app has. Above it, 1.0 starts to matter — a single app at 5 000 pageloads/day is
+~5.4M spans/month and blows the plan on its own.
+
+Precedence: `tracesSampleRate` option > `NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE` >
+default. An out-of-range or unparseable value is refused with a `console.error`
+and the default is used — it is **not** clamped, and it is **not** swallowed
+(typing `0,2` with a decimal comma while trying to cut volume 5× would otherwise
+land you silently on `1.0`). A blank value means "unset" and stays silent.
+
+`0` is honoured: no pageload and no navigation traces, errors untouched.
+⚠️ It does **not** zero your browser span bill on its own — standalone web-vital
+spans (INP, and CLS/LCP when enabled) ride `NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE`
+(100% by default), which `createTracesSampler` settles *before* the traces rate.
+That decoupling is deliberate — it is why INP stopped being empty portfolio-wide
+in 0.6.0, and "web vitals only, no full pageload traces" is a good setting for a
+low-traffic vitrine — but a genuine full stop needs
+`NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE=0` as well.
 
 The second argument is the **web-vital rate** (default `1.0`, override with
 `NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE`). Since SDK 8.x, **INP is emitted as
@@ -372,6 +438,7 @@ const cleaned = redact(myEvent);
 | `VERCEL_GIT_COMMIT_SHA` | Auto on Vercel | release tracking |
 | `NODE_ENV` | Auto | sample rates + enabled flag + environment fallback |
 | `NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE` | Optional, client | web-vital (INP) sample rate — default `1.0` |
+| `NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE` | Optional, client | browser traces rate — default `1.0`; set `0.2` above ~500 pageloads/day |
 | `NEXT_PUBLIC_SENTRY_REPLAY_MODE` | Optional, **build-time** | `lazy` → Replay in an async chunk (see Replay section) |
 
 ## What this does NOT do

@@ -3,6 +3,102 @@
 All notable changes to `@groupe-j/sentry-config` are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [1.0.0] - 2026-07-31
+
+### Changed — BREAKING
+
+- **Browser traces sample rate is now 100% in production, not 10%** (GRO-869).
+  `initSentryClient` no longer reads `SENTRY_TRACES_SAMPLE_RATE`; it reads the
+  new `SENTRY_BROWSER_TRACES_SAMPLE_RATE`. **`initSentryServer` and
+  `initSentryEdge` are unchanged at 10%** — this is a browser-only change.
+
+  Per CONTRIBUTING → *Politique semver*, "change de sample rate par défaut =
+  major": every consumer must re-validate its Sentry budget before bumping,
+  which is precisely why this is a major and not a minor.
+
+  The 10% figure was calibrated on the **server** tier and starved the browser
+  tier to nothing. Measured in Sentry over the 30 days to 2026-07-31,
+  `environment:production` (stored = billed spans):
+
+  ```
+  app                 server txns   browser txns   browser spans   ×10 (at 1.0)
+  megahote-t3              34 875              8             435          4 350
+  jepeuxconstruire         20 401             69           3 311         33 110
+  linegroup                 1 941             24           1 052         10 520
+  archicollab-t3              742             77           2 601         26 010
+  jelement                      0             60           3 664         36 640
+  coraly                       99              9             347          3 470
+  businessfamily                3              0               0              0
+  ```
+
+  Half the portfolio was collecting fewer than ten browser transactions a month
+  — one every three days. No p75 web vital, no navigation timing, no way to tell
+  a regression from noise. Sentry's own extrapolation confirms the rate
+  empirically: `count() / count_sample()` on those pageload spans is exactly
+  `10.0` on every app going through this package.
+
+  **Cost of the change:** ~103 000 additional stored spans/month portfolio-wide,
+  against 1 704 224 spans already ingested in the same window and a reserved
+  quota of 5 000 000 spans/month — **+6% of ingestion, +2% of quota**. Replays,
+  profiles and errors have their own rates and do not move.
+
+  **🔻 Descent threshold, written here and in `sampling.ts` rather than in a
+  ticket:** above **~500 pageloads/day**, set `tracesSampleRate: 0.2` on that
+  app. Derivation: ~100 sampled pageloads/day is where a daily p75 web vital
+  stops jittering, and `0.2 × 500 = 100`. Below that, dialling down saves tens of
+  thousands of spans on a five-million quota and costs the only signal the app
+  has; above it, a single app at 5 000 pageloads/day would be ~5.4M spans/month
+  at 1.0 and blow the plan on its own.
+
+  Migration: nothing to do to accept the new default. To keep the old
+  behaviour, pass `tracesSampleRate: 0.1` (below) or set
+  `NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE=0.1`.
+
+### Added
+
+- **`tracesSampleRate` option on `initSentryClient`** — the blocker behind
+  GRO-869: the browser rate was not exposed at all, so an app that wanted more
+  than 10% had no recourse short of abandoning the helper. Accepts `[0, 1]`.
+  `0` is honoured as a deliberate opt-out (no pageload/navigation traces, error
+  reporting untouched); an out-of-range value is refused with a loud
+  `console.error` and the default is used — deliberately **not** clamped, since
+  clamping a typo'd `10` to `1` would ship the wrong volume under the appearance
+  of working. Available on both `/client` and `/client-lazy`.
+
+  ⚠️ `tracesSampleRate: 0` does **not** zero the browser span bill by itself.
+  Standalone web-vital spans ride `SENTRY_WEBVITAL_SAMPLE_RATE` (100%), which
+  the sampler settles *before* the traces rate — the decoupling that fixed
+  "INP empty everywhere" in 0.6.0. A full stop also needs
+  `NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE=0`. Now stated in the JSDoc and
+  pinned by a test.
+
+- **`NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE`** — same knob without a code
+  deploy. Precedence: option > env var > default.
+
+### Fixed
+
+- **`parseRate` no longer swallows a bad env var.** A non-blank value that does
+  not parse to `[0, 1]` now logs a `console.error` naming the variable before
+  falling back, instead of reverting to the default in silence. This var is
+  documented as *the* no-deploy way to dial an app **down**, so an operator
+  typing `0,2` (decimal comma) or `20%` to cut volume 5× was landing on `1.0`
+  with nothing in the logs — the opposite of the intent. Blank still means
+  "unset" and stays silent. Applies to `NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE`
+  too.
+
+- **`SENTRY_BROWSER_TRACES_SAMPLE_RATE`** exported from the barrel **and from
+  both client entry points**.
+
+- **New subpath `@groupe-j/sentry-config/armed`** — `assertSentryArmed` without
+  the barrel. Importing it from the barrel inside a client module breaks the
+  build: the barrel also re-exports `withCronMonitor` and
+  `createSentryTrpcMiddleware`, which reference `Sentry.withMonitor` and
+  `Sentry.trpcMiddleware` — absent from the browser build of `@sentry/nextjs`
+  (observed on businessfamily, 2026-07-31). `src/armed.ts` imports nothing at
+  all, so the new entry is safe from every runtime. A source-graph test now
+  asserts that no module reachable from `client`, `client-lazy` or `armed`
+  touches a server-only SDK member.
+
 ## [0.7.0] - 2026-07-25
 
 ### Added

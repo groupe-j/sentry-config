@@ -72,6 +72,9 @@ import {
  */
 export type LazyReplayMode = "lazy" | false;
 
+/** See the note on the same re-export in `client.ts` — never import the barrel from a client module. */
+export { SENTRY_BROWSER_TRACES_SAMPLE_RATE } from "./sampling.js";
+
 export interface InitSentryClientLazyOptions extends InitSentryClientBaseOptions {
   /**
    * `"lazy"` (default) — Replay fetched from the CDN after first paint or on

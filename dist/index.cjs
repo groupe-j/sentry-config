@@ -177,15 +177,25 @@ var SENTRY_PROFILES_SAMPLE_RATE = process.env.NODE_ENV === "production" ? 0.1 : 
 var SENTRY_REPLAYS_SESSION_SAMPLE_RATE = process.env.NODE_ENV === "production" ? 0.1 : 0;
 var SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE = 1;
 var SENTRY_ENABLED = process.env.NODE_ENV !== "test";
+var SENTRY_BROWSER_TRACES_SAMPLE_RATE = parseRate(
+  process.env.NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE,
+  1,
+  "NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE"
+);
 var SENTRY_ENVIRONMENT = process.env.SENTRY_ENVIRONMENT ?? process.env.NEXT_PUBLIC_SENTRY_ENVIRONMENT ?? process.env.VERCEL_ENV ?? process.env.NODE_ENV ?? "development";
 var SENTRY_WEBVITAL_SAMPLE_RATE = parseRate(
   process.env.NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE ?? process.env.SENTRY_WEBVITAL_SAMPLE_RATE,
-  1
+  1,
+  "NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE"
 );
-function parseRate(raw, fallback) {
+function parseRate(raw, fallback, name) {
   if (raw === void 0 || raw.trim() === "") return fallback;
   const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : fallback;
+  if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1) return parsed;
+  console.error(
+    `[sentry-config] ${name ?? "sample rate"}: expected a number in [0, 1], got ${JSON.stringify(raw)}. Using ${fallback} instead \u2014 the value you set is NOT in effect.`
+  );
+  return fallback;
 }
 var WEB_VITAL_ORIGINS = /* @__PURE__ */ new Set([
   "auto.http.browser.inp",
@@ -341,6 +351,7 @@ function assertSentryArmed(Sentry3, options = {}) {
 exports.DEFAULT_DENY_URLS = DEFAULT_DENY_URLS;
 exports.DEFAULT_IGNORED_ERRORS = DEFAULT_IGNORED_ERRORS;
 exports.REDACTED = REDACTED;
+exports.SENTRY_BROWSER_TRACES_SAMPLE_RATE = SENTRY_BROWSER_TRACES_SAMPLE_RATE;
 exports.SENTRY_ENABLED = SENTRY_ENABLED;
 exports.SENTRY_ENVIRONMENT = SENTRY_ENVIRONMENT;
 exports.SENTRY_PROFILES_SAMPLE_RATE = SENTRY_PROFILES_SAMPLE_RATE;

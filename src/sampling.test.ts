@@ -105,8 +105,17 @@ describe("web-vital rate parsing (parseRate)", () => {
   });
 
   it("falls back to 1.0 for garbage and out-of-range values", async () => {
-    for (const raw of ["abc", "2", "-1", "NaN", "Infinity"]) {
-      expect(await rateFor(raw), `raw=${JSON.stringify(raw)}`).toBe(1.0);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      for (const raw of ["abc", "2", "-1", "NaN", "Infinity"]) {
+        errorSpy.mockClear();
+        expect(await rateFor(raw), `raw=${JSON.stringify(raw)}`).toBe(1.0);
+        // Refusing a value the operator explicitly set is not something to do
+        // quietly — same rule as the traces rate.
+        expect(errorSpy, `raw=${JSON.stringify(raw)}`).toHaveBeenCalled();
+      }
+    } finally {
+      errorSpy.mockRestore();
     }
   });
 
@@ -122,5 +131,89 @@ describe("SENTRY_WEBVITAL_SAMPLE_RATE", () => {
   it("defaults to 1.0 so INP is actually collected", async () => {
     const { SENTRY_WEBVITAL_SAMPLE_RATE } = await import("./sampling.js");
     expect(SENTRY_WEBVITAL_SAMPLE_RATE).toBe(1.0);
+  });
+});
+
+describe("SENTRY_BROWSER_TRACES_SAMPLE_RATE", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it("defaults to 1.0 — 10% starves the browser tier to zero", async () => {
+    const { SENTRY_BROWSER_TRACES_SAMPLE_RATE } = await import("./sampling.js");
+    expect(SENTRY_BROWSER_TRACES_SAMPLE_RATE).toBe(1.0);
+  });
+
+  it("stays at 1.0 in PRODUCTION while the server rate drops to 0.1", async () => {
+    // The whole point of GRO-869, and the only environment where the two rates
+    // differ — so this is the assertion that actually guards the fix. The
+    // server tier keeps 10% (calibrated on ~35k transactions/month of crons +
+    // http.server on the loudest app); the browser tier, two orders of
+    // magnitude smaller, is no longer starved by it. If these two ever collapse
+    // back into one constant, this test goes red.
+    vi.resetModules();
+    vi.stubEnv("NODE_ENV", "production");
+    const mod = await import("./sampling.js");
+    expect(mod.SENTRY_TRACES_SAMPLE_RATE).toBe(0.1);
+    expect(mod.SENTRY_BROWSER_TRACES_SAMPLE_RATE).toBe(1.0);
+  });
+
+  it("is overridable via NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE, including 0", async () => {
+    for (const [raw, expected] of [
+      ["0.2", 0.2],
+      ["0", 0],
+      ["1", 1],
+    ] as const) {
+      vi.resetModules();
+      vi.stubEnv("NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE", raw);
+      const mod = await import("./sampling.js");
+      expect(mod.SENTRY_BROWSER_TRACES_SAMPLE_RATE, `raw=${raw}`).toBe(expected);
+    }
+  });
+
+  it("falls back to 1.0 on an empty or out-of-range env var", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      for (const raw of ["", "   ", "abc", "2", "-1"]) {
+        vi.resetModules();
+        vi.stubEnv("NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE", raw);
+        const mod = await import("./sampling.js");
+        expect(mod.SENTRY_BROWSER_TRACES_SAMPLE_RATE, `raw=${JSON.stringify(raw)}`).toBe(1.0);
+      }
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("says so out loud when a non-blank value is refused", async () => {
+    // This env var is documented as THE no-deploy way to dial an app down. An
+    // operator typing `0,2` (decimal comma) or `20%` to cut volume by 5× would
+    // otherwise land on the 1.0 default with nothing in the logs — the opposite
+    // of the intent, silently. Blank stays silent: blank means "unset".
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      for (const raw of ["0,2", "20%", "abc", "2", "-1"]) {
+        vi.resetModules();
+        errorSpy.mockClear();
+        vi.stubEnv("NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE", raw);
+        const mod = await import("./sampling.js");
+        expect(mod.SENTRY_BROWSER_TRACES_SAMPLE_RATE, `raw=${raw}`).toBe(1.0);
+        expect(errorSpy, `raw=${raw}`).toHaveBeenCalled();
+        expect(String(errorSpy.mock.calls[0]?.[0]), `raw=${raw}`).toContain(
+          "NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE",
+        );
+      }
+
+      for (const raw of ["", "   ", "0.2"]) {
+        vi.resetModules();
+        errorSpy.mockClear();
+        vi.stubEnv("NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE", raw);
+        await import("./sampling.js");
+        expect(errorSpy, `raw=${JSON.stringify(raw)} must stay silent`).not.toHaveBeenCalled();
+      }
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });

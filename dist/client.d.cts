@@ -1,4 +1,5 @@
-import { I as InitSentryClientBaseOptions, R as ReplayMode } from './client-core-DNcijrqR.cjs';
+import { I as InitSentryClientBaseOptions, R as ReplayMode } from './client-core-Bo357rO8.cjs';
+export { S as SENTRY_BROWSER_TRACES_SAMPLE_RATE } from './sampling-C6bf4ETQ.cjs';
 
 /**
  * Browser-side Sentry init helper — **eager Replay** entry point.

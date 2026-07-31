@@ -179,6 +179,27 @@ describe("tracesSampleRate — GRO-869", () => {
     expect(effectiveRate()).toBe(0);
   });
 
+  it("0 stops pageloads but NOT web vitals — the documented decoupling", async () => {
+    // Pinned because it is surprising and the JSDoc now promises it explicitly:
+    // web-vital standalone spans ride their own rate and are settled before the
+    // traces rate is consulted. "Web vitals only, no pageload traces" is a real
+    // setting; a full stop additionally needs
+    // NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE=0. If this ever changes, the
+    // doc comment on `tracesSampleRate` has to change with it.
+    stubBrowser();
+    const { initSentryClient } = await loadEager();
+    initSentryClient({ app: "probe", tracesSampleRate: 0 });
+    const sampler = initOptions().tracesSampler as (ctx: unknown) => number;
+    expect(sampler({ name: "/x" })).toBe(0);
+    for (const origin of [
+      "auto.http.browser.inp",
+      "auto.http.browser.cls",
+      "auto.http.browser.lcp",
+    ]) {
+      expect(sampler({ attributes: { "sentry.origin": origin } }), origin).toBe(1.0);
+    }
+  });
+
   it("rejects an out-of-range rate loudly rather than clamping it", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try {

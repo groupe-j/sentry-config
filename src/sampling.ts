@@ -80,6 +80,7 @@ export const SENTRY_ENABLED = process.env.NODE_ENV !== "test";
 export const SENTRY_BROWSER_TRACES_SAMPLE_RATE = parseRate(
   process.env.NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE,
   1.0,
+  "NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE",
 );
 
 /**
@@ -117,17 +118,30 @@ export const SENTRY_WEBVITAL_SAMPLE_RATE = parseRate(
   process.env.NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE ??
     process.env.SENTRY_WEBVITAL_SAMPLE_RATE,
   1.0,
+  "NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE",
 );
 
-function parseRate(raw: string | undefined, fallback: number): number {
+function parseRate(raw: string | undefined, fallback: number, name?: string): number {
   // A declared-but-empty env var is the common Vercel accident, and `Number("")`
   // is `0` — which is a perfectly valid rate. Left unguarded, an empty
   // NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE would silently set the rate to 0 and
   // re-create the exact "INP is empty everywhere" bug this module exists to fix.
-  // Blank means "unset".
+  // Blank means "unset", and that is a legitimate state — stay silent for it.
   if (raw === undefined || raw.trim() === "") return fallback;
   const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : fallback;
+  if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1) return parsed;
+  // A *non-blank* value that does not parse is somebody trying to set a rate and
+  // failing. Falling back silently is the fail-open shape this module is full of
+  // warnings about: `NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE` is documented as the
+  // no-deploy way to dial an app DOWN, so an operator who types `0,2` (decimal
+  // comma) or `20%` while trying to cut volume by 5× lands on the 1.0 default
+  // instead — the exact opposite of the intent, with nothing in the logs. Same
+  // reasoning as `resolveTracesRate` in client-core.ts: say so, loudly.
+  console.error(
+    `[sentry-config] ${name ?? "sample rate"}: expected a number in [0, 1], got ${JSON.stringify(raw)}. ` +
+      `Using ${fallback} instead — the value you set is NOT in effect.`,
+  );
+  return fallback;
 }
 
 /**

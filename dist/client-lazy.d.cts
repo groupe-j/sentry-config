@@ -1,4 +1,4 @@
-import { I as InitSentryClientBaseOptions } from './client-core-DR_6L2L1.cjs';
+import { I as InitSentryClientBaseOptions } from './client-core-Bo357rO8.cjs';
 export { S as SENTRY_BROWSER_TRACES_SAMPLE_RATE } from './sampling-C6bf4ETQ.cjs';
 
 /**

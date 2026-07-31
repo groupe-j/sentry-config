@@ -391,9 +391,19 @@ app has. Above it, 1.0 starts to matter — a single app at 5 000 pageloads/day 
 ~5.4M spans/month and blows the plan on its own.
 
 Precedence: `tracesSampleRate` option > `NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE` >
-default. `0` is honoured (browser tracing off, errors still reported); an
-out-of-range value is refused with a `console.error` and the default is used —
-it is not clamped.
+default. An out-of-range or unparseable value is refused with a `console.error`
+and the default is used — it is **not** clamped, and it is **not** swallowed
+(typing `0,2` with a decimal comma while trying to cut volume 5× would otherwise
+land you silently on `1.0`). A blank value means "unset" and stays silent.
+
+`0` is honoured: no pageload and no navigation traces, errors untouched.
+⚠️ It does **not** zero your browser span bill on its own — standalone web-vital
+spans (INP, and CLS/LCP when enabled) ride `NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE`
+(100% by default), which `createTracesSampler` settles *before* the traces rate.
+That decoupling is deliberate — it is why INP stopped being empty portfolio-wide
+in 0.6.0, and "web vitals only, no full pageload traces" is a good setting for a
+low-traffic vitrine — but a genuine full stop needs
+`NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE=0` as well.
 
 The second argument is the **web-vital rate** (default `1.0`, override with
 `NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE`). Since SDK 8.x, **INP is emitted as

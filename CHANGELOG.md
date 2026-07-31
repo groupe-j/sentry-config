@@ -59,15 +59,32 @@ This project follows [Semantic Versioning](https://semver.org/).
 - **`tracesSampleRate` option on `initSentryClient`** — the blocker behind
   GRO-869: the browser rate was not exposed at all, so an app that wanted more
   than 10% had no recourse short of abandoning the helper. Accepts `[0, 1]`.
-  `0` is honoured as a deliberate opt-out (browser tracing off, error reporting
-  untouched); an out-of-range value is refused with a loud `console.error` and
-  the default is used — deliberately **not** clamped, since clamping a typo'd
-  `10` to `1` would ship the wrong volume under the appearance of working.
-  Available on both `/client` and `/client-lazy`.
+  `0` is honoured as a deliberate opt-out (no pageload/navigation traces, error
+  reporting untouched); an out-of-range value is refused with a loud
+  `console.error` and the default is used — deliberately **not** clamped, since
+  clamping a typo'd `10` to `1` would ship the wrong volume under the appearance
+  of working. Available on both `/client` and `/client-lazy`.
+
+  ⚠️ `tracesSampleRate: 0` does **not** zero the browser span bill by itself.
+  Standalone web-vital spans ride `SENTRY_WEBVITAL_SAMPLE_RATE` (100%), which
+  the sampler settles *before* the traces rate — the decoupling that fixed
+  "INP empty everywhere" in 0.6.0. A full stop also needs
+  `NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE=0`. Now stated in the JSDoc and
+  pinned by a test.
 
 - **`NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE`** — same knob without a code
-  deploy. Precedence: option > env var > default. Blank/garbage/out-of-range
-  falls back to the default (same `parseRate` guard as the web-vital rate).
+  deploy. Precedence: option > env var > default.
+
+### Fixed
+
+- **`parseRate` no longer swallows a bad env var.** A non-blank value that does
+  not parse to `[0, 1]` now logs a `console.error` naming the variable before
+  falling back, instead of reverting to the default in silence. This var is
+  documented as *the* no-deploy way to dial an app **down**, so an operator
+  typing `0,2` (decimal comma) or `20%` to cut volume 5× was landing on `1.0`
+  with nothing in the logs — the opposite of the intent. Blank still means
+  "unset" and stays silent. Applies to `NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE`
+  too.
 
 - **`SENTRY_BROWSER_TRACES_SAMPLE_RATE`** exported from the barrel **and from
   both client entry points**.

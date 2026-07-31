@@ -1,4 +1,4 @@
-import { I as InitSentryClientBaseOptions, R as ReplayMode } from './client-core-DR_6L2L1.js';
+import { I as InitSentryClientBaseOptions, R as ReplayMode } from './client-core-Bo357rO8.js';
 export { S as SENTRY_BROWSER_TRACES_SAMPLE_RATE } from './sampling-C6bf4ETQ.js';
 
 /**

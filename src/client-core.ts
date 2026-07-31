@@ -109,10 +109,22 @@ export interface InitSentryClientBaseOptions {
    * `SENTRY_TRACES_SAMPLE_RATE` (10%), which is what the server tier's volume
    * justifies.
    *
-   * `0` is a legal value and is honoured: it disables browser tracing while
-   * leaving error reporting on. Anything outside `[0, 1]` (or `NaN`) is a
-   * programming error — it is logged loudly and the default is used, rather
-   * than silently shipping a rate nobody chose.
+   * `0` is a legal value and is honoured as written: no pageload and no
+   * navigation traces, error reporting untouched.
+   *
+   * ⚠️ **`0` here does NOT zero your browser span bill.** Standalone web-vital
+   * spans (INP, and CLS/LCP when enabled) are sampled on their **own** rate —
+   * `SENTRY_WEBVITAL_SAMPLE_RATE`, 100% by default — and `createTracesSampler`
+   * settles them *before* it looks at this one. That decoupling is deliberate
+   * (it is why INP stopped being empty portfolio-wide in 0.6.0, and
+   * "web vitals only, no full pageload traces" is a genuinely good setting for a
+   * low-traffic vitrine), but it does mean `tracesSampleRate: 0` alone leaves
+   * one span per interactive page still flowing. For an actual full stop, add
+   * `NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE=0`.
+   *
+   * Anything outside `[0, 1]` (or `NaN`) is a programming error — it is logged
+   * loudly and the default is used, rather than silently shipping a rate nobody
+   * chose.
    *
    * Precedence: this option > `NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE` > default.
    */

@@ -105,8 +105,17 @@ describe("web-vital rate parsing (parseRate)", () => {
   });
 
   it("falls back to 1.0 for garbage and out-of-range values", async () => {
-    for (const raw of ["abc", "2", "-1", "NaN", "Infinity"]) {
-      expect(await rateFor(raw), `raw=${JSON.stringify(raw)}`).toBe(1.0);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      for (const raw of ["abc", "2", "-1", "NaN", "Infinity"]) {
+        errorSpy.mockClear();
+        expect(await rateFor(raw), `raw=${JSON.stringify(raw)}`).toBe(1.0);
+        // Refusing a value the operator explicitly set is not something to do
+        // quietly — same rule as the traces rate.
+        expect(errorSpy, `raw=${JSON.stringify(raw)}`).toHaveBeenCalled();
+      }
+    } finally {
+      errorSpy.mockRestore();
     }
   });
 
@@ -164,11 +173,47 @@ describe("SENTRY_BROWSER_TRACES_SAMPLE_RATE", () => {
   });
 
   it("falls back to 1.0 on an empty or out-of-range env var", async () => {
-    for (const raw of ["", "   ", "abc", "2", "-1"]) {
-      vi.resetModules();
-      vi.stubEnv("NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE", raw);
-      const mod = await import("./sampling.js");
-      expect(mod.SENTRY_BROWSER_TRACES_SAMPLE_RATE, `raw=${JSON.stringify(raw)}`).toBe(1.0);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      for (const raw of ["", "   ", "abc", "2", "-1"]) {
+        vi.resetModules();
+        vi.stubEnv("NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE", raw);
+        const mod = await import("./sampling.js");
+        expect(mod.SENTRY_BROWSER_TRACES_SAMPLE_RATE, `raw=${JSON.stringify(raw)}`).toBe(1.0);
+      }
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("says so out loud when a non-blank value is refused", async () => {
+    // This env var is documented as THE no-deploy way to dial an app down. An
+    // operator typing `0,2` (decimal comma) or `20%` to cut volume by 5× would
+    // otherwise land on the 1.0 default with nothing in the logs — the opposite
+    // of the intent, silently. Blank stays silent: blank means "unset".
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      for (const raw of ["0,2", "20%", "abc", "2", "-1"]) {
+        vi.resetModules();
+        errorSpy.mockClear();
+        vi.stubEnv("NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE", raw);
+        const mod = await import("./sampling.js");
+        expect(mod.SENTRY_BROWSER_TRACES_SAMPLE_RATE, `raw=${raw}`).toBe(1.0);
+        expect(errorSpy, `raw=${raw}`).toHaveBeenCalled();
+        expect(String(errorSpy.mock.calls[0]?.[0]), `raw=${raw}`).toContain(
+          "NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE",
+        );
+      }
+
+      for (const raw of ["", "   ", "0.2"]) {
+        vi.resetModules();
+        errorSpy.mockClear();
+        vi.stubEnv("NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE", raw);
+        await import("./sampling.js");
+        expect(errorSpy, `raw=${JSON.stringify(raw)} must stay silent`).not.toHaveBeenCalled();
+      }
+    } finally {
+      errorSpy.mockRestore();
     }
   });
 });

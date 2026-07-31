@@ -84,6 +84,26 @@ interface InitSentryClientBaseOptions {
      * Set true only when you have explicit user consent and need the data.
      */
     sendDefaultPii?: boolean;
+    /**
+     * Fraction of browser pageloads / navigations that get a trace, in `[0, 1]`.
+     *
+     * Default: {@link SENTRY_BROWSER_TRACES_SAMPLE_RATE} — **1.0 in production**,
+     * 1.0 in dev. Read that doc comment before overriding: it carries the
+     * measured volumes and the threshold at which coming back down to `0.2` is
+     * the right call (**~500 pageloads/day**).
+     *
+     * This knob is browser-only. `initSentryServer` / `initSentryEdge` keep
+     * `SENTRY_TRACES_SAMPLE_RATE` (10%), which is what the server tier's volume
+     * justifies.
+     *
+     * `0` is a legal value and is honoured: it disables browser tracing while
+     * leaving error reporting on. Anything outside `[0, 1]` (or `NaN`) is a
+     * programming error — it is logged loudly and the default is used, rather
+     * than silently shipping a rate nobody chose.
+     *
+     * Precedence: this option > `NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE` > default.
+     */
+    tracesSampleRate?: number;
 }
 
 export type { InitSentryClientBaseOptions as I, ReplayMode as R };

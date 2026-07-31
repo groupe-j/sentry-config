@@ -194,6 +194,10 @@ process.env.NODE_ENV === "production" ? 0.1 : 1;
 var SENTRY_REPLAYS_SESSION_SAMPLE_RATE = process.env.NODE_ENV === "production" ? 0.1 : 0;
 var SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE = 1;
 var SENTRY_ENABLED = process.env.NODE_ENV !== "test";
+var SENTRY_BROWSER_TRACES_SAMPLE_RATE = parseRate(
+  process.env.NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE,
+  1
+);
 var SENTRY_ENVIRONMENT = process.env.SENTRY_ENVIRONMENT ?? process.env.NEXT_PUBLIC_SENTRY_ENVIRONMENT ?? process.env.VERCEL_ENV ?? process.env.NODE_ENV ?? "development";
 var SENTRY_WEBVITAL_SAMPLE_RATE = parseRate(
   process.env.NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE ?? process.env.SENTRY_WEBVITAL_SAMPLE_RATE,
@@ -244,9 +248,11 @@ function initClientCore({ options, replay, eagerReplay }) {
     tunnel,
     replayCdnBaseUrl,
     replayScriptNonce,
-    sendDefaultPii = false
+    sendDefaultPii = false,
+    tracesSampleRate
   } = options;
   const isEnabled = SENTRY_ENABLED && (enabled?.() ?? true);
+  const tracesRate = resolveTracesRate(tracesSampleRate);
   const replayEnabled = replay !== false;
   const tuning = {
     maskAllText: replayMaskAllText,
@@ -256,7 +262,7 @@ function initClientCore({ options, replay, eagerReplay }) {
     dsn: dsn ?? process.env.NEXT_PUBLIC_SENTRY_DSN,
     environment: SENTRY_ENVIRONMENT,
     release: process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ?? process.env.VERCEL_GIT_COMMIT_SHA,
-    tracesSampler: createTracesSampler(SENTRY_TRACES_SAMPLE_RATE),
+    tracesSampler: createTracesSampler(tracesRate),
     // Rates are identical between `true` and `"lazy"`: the integration reads
     // them off the client options whenever it is set up — at init, or later.
     replaysSessionSampleRate: replayEnabled ? SENTRY_REPLAYS_SESSION_SAMPLE_RATE : 0,
@@ -284,6 +290,14 @@ function initClientCore({ options, replay, eagerReplay }) {
   if (replayEnabled && true && isEnabled) {
     scheduleLazyReplay(tuning, replayScriptNonce);
   }
+}
+function resolveTracesRate(rate) {
+  if (rate === void 0) return SENTRY_BROWSER_TRACES_SAMPLE_RATE;
+  if (Number.isFinite(rate) && rate >= 0 && rate <= 1) return rate;
+  console.error(
+    `[sentry-config] initSentryClient: tracesSampleRate must be a number in [0, 1], got ${String(rate)}. Falling back to the default (${SENTRY_BROWSER_TRACES_SAMPLE_RATE}).`
+  );
+  return SENTRY_BROWSER_TRACES_SAMPLE_RATE;
 }
 function scheduleLazyReplay(tuning, scriptNonce) {
   if (typeof window === "undefined" || typeof document === "undefined") return;
@@ -335,6 +349,6 @@ function initSentryClient(opts) {
   });
 }
 
-export { initSentryClient };
+export { SENTRY_BROWSER_TRACES_SAMPLE_RATE, initSentryClient };
 //# sourceMappingURL=client-lazy.js.map
 //# sourceMappingURL=client-lazy.js.map

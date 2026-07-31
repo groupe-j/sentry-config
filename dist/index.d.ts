@@ -1,3 +1,6 @@
+export { S as SENTRY_BROWSER_TRACES_SAMPLE_RATE, a as SENTRY_ENABLED, b as SENTRY_ENVIRONMENT, c as SENTRY_PROFILES_SAMPLE_RATE, d as SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE, e as SENTRY_REPLAYS_SESSION_SAMPLE_RATE, f as SENTRY_TRACES_SAMPLE_RATE, g as SENTRY_WEBVITAL_SAMPLE_RATE, h as createTracesSampler } from './sampling-C6bf4ETQ.js';
+export { AssertSentryArmedOptions, SentryArmedLike, SentryClientLike, assertSentryArmed } from './armed.js';
+
 /**
  * `beforeSend` callback factory. Tags events with app name and scrubs PII.
  *
@@ -62,76 +65,6 @@ declare const REDACTED = "[REDACTED]";
 declare function isSensitive(key: string): boolean;
 declare function redact(value: unknown, seen?: WeakSet<object>): unknown;
 declare function scrubHeaders(headers: Record<string, string>): Record<string, string>;
-
-/**
- * Sampling rates per environment.
- *
- * process.env.NODE_ENV is baked at build time in Next.js, so reading once
- * at module load is safe.
- *
- * Production: 10% (cost control)
- * Dev/preview: 100% (catch everything during development)
- * Test: disabled (no Sentry noise from CI)
- */
-declare const SENTRY_TRACES_SAMPLE_RATE: number;
-declare const SENTRY_PROFILES_SAMPLE_RATE: number;
-declare const SENTRY_REPLAYS_SESSION_SAMPLE_RATE: number;
-declare const SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE = 1;
-declare const SENTRY_ENABLED: boolean;
-/**
- * Explicit override wins over the Vercel/Node defaults.
- *
- * `SENTRY_ENVIRONMENT` is the server-side var. The browser bundle only sees
- * `NEXT_PUBLIC_*` vars (Next.js inlines those at build time and drops
- * non-public ones), so client consumers set `NEXT_PUBLIC_SENTRY_ENVIRONMENT`.
- * Both fall through to `VERCEL_ENV` (prod/preview) and `NODE_ENV` (local/test)
- * when unset, so dev/preview/prod behaviour is unchanged unless an app opts in
- * — e.g. a CI e2e run booting under `next start` that wants `environment: "ci"`.
- */
-declare const SENTRY_ENVIRONMENT: string;
-/**
- * Web-vital sample rate — INP & friends.
- *
- * Why it is NOT `SENTRY_TRACES_SAMPLE_RATE`: since SDK 8.x the browser SDK
- * emits INP (and optionally CLS/LCP) as **standalone spans**, i.e. one root
- * span per measurement, sampled through the very same `tracesSampler` as a
- * pageload. At 10% in production, a portfolio of low-traffic sites collects
- * ~0 INP samples — which is exactly what we observed: LCP/CLS/FCP/TTFB (which
- * ride along the pageload transaction, one per pageview) were populated on the
- * 13 Sentry projects while INP was empty everywhere.
- *
- * INP is emitted at most once per page lifetime, so 100% is cheap. Dial it
- * down with `NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE` on a high-traffic app.
- */
-declare const SENTRY_WEBVITAL_SAMPLE_RATE: number;
-/**
- * Loose SamplingContext shape — matches @sentry/types without coupling.
- */
-interface SamplingContextLike {
-    name?: string;
-    transactionContext?: {
-        name?: string;
-    };
-    request?: {
-        url?: string;
-    };
-    /** Span attributes known at sampling time (SDK 8+). */
-    attributes?: Record<string, unknown>;
-}
-/**
- * Builds a `tracesSampler` that returns 0 for low-value routes.
- * Pass to `Sentry.init({ tracesSampler: createTracesSampler(0.1) })`.
- *
- * Web-vital standalone spans (INP…) are handled FIRST and on their own rate.
- * Two reasons:
- *  1. quota: see {@link SENTRY_WEBVITAL_SAMPLE_RATE} — 10% of a once-per-page
- *     metric is statistically nothing on our traffic;
- *  2. correctness: the `name` of an INP span is a DOM selector, not a URL
- *     (`htmlTreeAsString(target)`, e.g. `div#root > div.map`). Running URL
- *     patterns on it silently drops interactions whose deepest CSS class ends
- *     with `.map`, `.css`, `.js`… — a real hazard on our map-heavy apps.
- */
-declare function createTracesSampler(defaultRate?: number, webVitalRate?: number): (ctx: SamplingContextLike) => number;
 
 /**
  * User context helpers.
@@ -397,47 +330,4 @@ interface SentryTrpcMiddlewareLike {
  */
 declare function createSentryTrpcMiddleware(Sentry: SentryTrpcMiddlewareLike, options?: SentryTrpcMiddlewareOptions): SentryTrpcMiddleware;
 
-/**
- * Guard that a Sentry SDK is actually "armed" — i.e. initialised with a real
- * DSN — so a missing-DSN / no-op SDK fails *visibly* instead of silently
- * swallowing every event.
- *
- * The failure mode this prevents: `Sentry.init()` runs with an empty/undefined
- * DSN (missing env var, wrong runtime), the SDK installs a no-op client, and
- * the app looks healthy while every `captureException` goes nowhere — exactly
- * the blind spot behind GRO-295. Call this right after `Sentry.init` on the
- * server:
- *
- *   import * as Sentry from '@sentry/nextjs';
- *   import { assertSentryArmed } from '@groupe-j/sentry-config';
- *
- *   initSentryServer({ app: 'portal' });
- *   assertSentryArmed(Sentry, { throwOnMissing: process.env.NODE_ENV === 'production' });
- */
-/** Minimal structural shape of a Sentry client (what `getClient()` returns). */
-interface SentryClientLike {
-    getDsn: () => unknown;
-}
-/**
- * Minimal structural shape of the Sentry SDK needed to check arming — satisfied
- * by `@sentry/nextjs`, `@sentry/node`, `@sentry/browser`, etc.
- */
-interface SentryArmedLike {
-    getClient: () => SentryClientLike | undefined;
-}
-interface AssertSentryArmedOptions {
-    /**
-     * Throw a hard error when no DSN is configured, instead of only logging.
-     * Default: false (log loudly but let the app continue). Set true in
-     * production startup if you'd rather fail the boot than run blind.
-     */
-    throwOnMissing?: boolean;
-}
-/**
- * Returns `true` when Sentry has a live client with a DSN. When it doesn't,
- * logs a loud `console.error` and returns `false` — or throws if
- * `throwOnMissing` is set.
- */
-declare function assertSentryArmed(Sentry: SentryArmedLike, options?: AssertSentryArmedOptions): boolean;
-
-export { type AssertSentryArmedOptions, type CronMonitorOptions, DEFAULT_DENY_URLS, DEFAULT_IGNORED_ERRORS, REDACTED, SENTRY_ENABLED, SENTRY_ENVIRONMENT, SENTRY_PROFILES_SAMPLE_RATE, SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE, SENTRY_REPLAYS_SESSION_SAMPLE_RATE, SENTRY_TRACES_SAMPLE_RATE, SENTRY_WEBVITAL_SAMPLE_RATE, type SentryArmedLike, type SentryClientLike, type SentryEventLike, type SentryTrpcMiddleware, type SentryTrpcMiddlewareArguments, type SentryTrpcMiddlewareLike, type SentryTrpcMiddlewareOptions, type SentryTrpcMiddlewareResult, type SentryUserContext, type TrpcErrorLike, type TrpcErrorType, type TrpcOnErrorPayload, type TrpcSentryLike, assertSentryArmed, clearSentryUser, createSentryBeforeSend, createSentryTrpcMiddleware, createTracesSampler, createTrpcSentryOnError, isBot, isSensitive, redact, scrubHeaders, setSentryUser, shouldReportTrpcError, withCronMonitor };
+export { type CronMonitorOptions, DEFAULT_DENY_URLS, DEFAULT_IGNORED_ERRORS, REDACTED, type SentryEventLike, type SentryTrpcMiddleware, type SentryTrpcMiddlewareArguments, type SentryTrpcMiddlewareLike, type SentryTrpcMiddlewareOptions, type SentryTrpcMiddlewareResult, type SentryUserContext, type TrpcErrorLike, type TrpcErrorType, type TrpcOnErrorPayload, type TrpcSentryLike, clearSentryUser, createSentryBeforeSend, createSentryTrpcMiddleware, createTrpcSentryOnError, isBot, isSensitive, redact, scrubHeaders, setSentryUser, shouldReportTrpcError, withCronMonitor };

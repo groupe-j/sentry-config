@@ -38,6 +38,17 @@ import {
 
 export type { ReplayMode } from "./client-core.js";
 
+/**
+ * Re-exported here on purpose: reading the default from a client module must
+ * never require importing the package **barrel**. The barrel pulls
+ * `withCronMonitor` → `Sentry.withMonitor` and `createSentryTrpcMiddleware` →
+ * `Sentry.trpcMiddleware`, neither of which exists in the browser build of
+ * `@sentry/nextjs`; a bundler resolving those namespace members fails the build
+ * outright (observed on businessfamily, 2026-07-31). Same reason
+ * `assertSentryArmed` now has its own `@groupe-j/sentry-config/armed` subpath.
+ */
+export { SENTRY_BROWSER_TRACES_SAMPLE_RATE } from "./sampling.js";
+
 export interface InitSentryClientOptions extends InitSentryClientBaseOptions {
   /**
    * Replay strategy for this entry point: `true` (default — set up during

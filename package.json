@@ -1,6 +1,6 @@
 {
   "name": "@groupe-j/sentry-config",
-  "version": "0.7.0",
+  "version": "1.0.0",
   "description": "Shared Sentry config + PII redaction for groupe-j apps. Extracted from ridesamui.",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -31,6 +31,11 @@
       "types": "./dist/edge.d.ts",
       "import": "./dist/edge.js",
       "require": "./dist/edge.cjs"
+    },
+    "./armed": {
+      "types": "./dist/armed.d.ts",
+      "import": "./dist/armed.js",
+      "require": "./dist/armed.cjs"
     }
   },
   "files": [

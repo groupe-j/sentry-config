@@ -144,6 +144,70 @@ describe("INP — the reason web vitals were missing", () => {
   });
 });
 
+describe("tracesSampleRate — GRO-869", () => {
+  /** Effective rate for an ordinary route, read off the sampler `init` received. */
+  function effectiveRate(): number {
+    const sampler = initOptions().tracesSampler as (ctx: { name: string }) => number;
+    return sampler({ name: "/vehicles" });
+  }
+
+  it("defaults to 100% in the browser — NOT the server's 10%", async () => {
+    stubBrowser();
+    const { initSentryClient } = await loadEager();
+    initSentryClient({ app: "probe" });
+    expect(effectiveRate()).toBe(1.0);
+  });
+
+  it("is overridable per app, on both entry points", async () => {
+    stubBrowser();
+    const { initSentryClient } = await loadEager();
+    initSentryClient({ app: "probe", tracesSampleRate: 0.2 });
+    expect(effectiveRate()).toBe(0.2);
+
+    initMock.mockClear();
+    const lazy = await loadLazy();
+    lazy.initSentryClient({ app: "probe", tracesSampleRate: 0.2 });
+    expect(effectiveRate()).toBe(0.2);
+  });
+
+  it("honours an explicit 0 instead of reading it as 'unset'", async () => {
+    // A truthiness test here would turn "no browser tracing" into "trace
+    // everything" — the loudest possible misreading of an opt-out.
+    stubBrowser();
+    const { initSentryClient } = await loadEager();
+    initSentryClient({ app: "probe", tracesSampleRate: 0 });
+    expect(effectiveRate()).toBe(0);
+  });
+
+  it("rejects an out-of-range rate loudly rather than clamping it", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      for (const bad of [10, -1, Number.NaN]) {
+        initMock.mockClear();
+        errorSpy.mockClear();
+        stubBrowser();
+        const { initSentryClient } = await loadEager();
+        initSentryClient({ app: "probe", tracesSampleRate: bad });
+        // Clamping 10 to 1 would ship the intended volume by accident; clamping
+        // it to 0 would kill tracing. Neither is a decision the package gets to
+        // make silently.
+        expect(effectiveRate(), `bad=${String(bad)}`).toBe(1.0);
+        expect(errorSpy).toHaveBeenCalled();
+      }
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("leaves the web-vital rate alone", async () => {
+    stubBrowser();
+    const { initSentryClient } = await loadEager();
+    initSentryClient({ app: "probe", tracesSampleRate: 0.2 });
+    const sampler = initOptions().tracesSampler as (ctx: unknown) => number;
+    expect(sampler({ attributes: { "sentry.origin": "auto.http.browser.inp" } })).toBe(1.0);
+  });
+});
+
 describe("/client — eager entry point (unchanged behaviour)", () => {
   it("default (true) keeps the eager integration and the 100% on-error rate", async () => {
     stubBrowser();
@@ -410,5 +474,46 @@ describe("bundle-size invariant — client-lazy must never reference replayInteg
 
   it("client.ts is the single place that references it", () => {
     expect(code("client.ts")).toMatch(/Sentry\s*\.\s*replayIntegration/);
+  });
+
+  /**
+   * Build invariant, separate from the byte-size one above.
+   *
+   * `Sentry.withMonitor` (crons) and `Sentry.trpcMiddleware` (tRPC) do not
+   * exist in the browser build of `@sentry/nextjs`. A bundler that has to
+   * resolve either against the client condition fails the build outright —
+   * which is exactly what happened to businessfamily on 2026-07-31, through the
+   * package **barrel** (`index.ts` re-exports both). Client entry points must
+   * therefore stay clear of them, and `armed.ts` — the module client code
+   * actually wants from the barrel — must keep importing nothing at all so its
+   * own `/armed` subpath is safe from every runtime.
+   */
+  const SERVER_ONLY_SDK_MEMBERS = ["withMonitor", "trpcMiddleware", "prismaIntegration"] as const;
+
+  it("no module reachable from a client entry touches a server-only SDK member", () => {
+    for (const entry of ["client.ts", "client-lazy.ts", "armed.ts"]) {
+      for (const f of localGraph(entry)) {
+        for (const member of SERVER_ONLY_SDK_MEMBERS) {
+          expect(code(f), `${entry} → ${f}: Sentry.${member}`).not.toMatch(
+            new RegExp(`Sentry\\s*\\.\\s*${member}`),
+          );
+        }
+      }
+    }
+  });
+
+  it("armed.ts imports nothing, so /armed is safe from any runtime", () => {
+    expect(localGraph("armed.ts")).toEqual(["armed.ts"]);
+    expect(code("armed.ts")).not.toMatch(/^\s*import\b/m);
+  });
+
+  it("the barrel really does drag the server-only members (the hazard is real)", () => {
+    // If this ever goes green-by-accident — because the barrel stopped
+    // re-exporting crons/tRPC — the warnings pointing client code at /armed
+    // become stale and should be removed rather than left to mislead.
+    const barrel = localGraph("index.ts");
+    expect(barrel).toContain("crons.ts");
+    expect(barrel).toContain("trpc-middleware.ts");
+    expect(code("crons.ts")).toMatch(/Sentry\s*\.\s*withMonitor/);
   });
 });

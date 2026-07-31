@@ -23,6 +23,7 @@ export {
 } from "./redaction.js";
 
 export {
+  SENTRY_BROWSER_TRACES_SAMPLE_RATE,
   SENTRY_ENABLED,
   SENTRY_ENVIRONMENT,
   SENTRY_PROFILES_SAMPLE_RATE,
@@ -59,6 +60,14 @@ export {
   type SentryTrpcMiddlewareResult,
 } from "./trpc-middleware.js";
 
+/**
+ * ⚠️ Do NOT import `assertSentryArmed` from this barrel inside a **client**
+ * module. The barrel also re-exports `withCronMonitor` and
+ * `createSentryTrpcMiddleware`, which reach for `Sentry.withMonitor` and
+ * `Sentry.trpcMiddleware` — server-only members of `@sentry/nextjs`. A bundler
+ * resolving them against the browser build fails the build (businessfamily,
+ * 2026-07-31). Use `@groupe-j/sentry-config/armed`, which imports nothing.
+ */
 export {
   assertSentryArmed,
   type AssertSentryArmedOptions,

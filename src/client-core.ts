@@ -19,11 +19,11 @@ import * as Sentry from "@sentry/nextjs";
 import { createSentryBeforeSend } from "./before-send.js";
 import { DEFAULT_DENY_URLS, DEFAULT_IGNORED_ERRORS } from "./ignored.js";
 import {
+  SENTRY_BROWSER_TRACES_SAMPLE_RATE,
   SENTRY_ENABLED,
   SENTRY_ENVIRONMENT,
   SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE,
   SENTRY_REPLAYS_SESSION_SAMPLE_RATE,
-  SENTRY_TRACES_SAMPLE_RATE,
   createTracesSampler,
 } from "./sampling.js";
 
@@ -97,6 +97,26 @@ export interface InitSentryClientBaseOptions {
    * Set true only when you have explicit user consent and need the data.
    */
   sendDefaultPii?: boolean;
+  /**
+   * Fraction of browser pageloads / navigations that get a trace, in `[0, 1]`.
+   *
+   * Default: {@link SENTRY_BROWSER_TRACES_SAMPLE_RATE} — **1.0 in production**,
+   * 1.0 in dev. Read that doc comment before overriding: it carries the
+   * measured volumes and the threshold at which coming back down to `0.2` is
+   * the right call (**~500 pageloads/day**).
+   *
+   * This knob is browser-only. `initSentryServer` / `initSentryEdge` keep
+   * `SENTRY_TRACES_SAMPLE_RATE` (10%), which is what the server tier's volume
+   * justifies.
+   *
+   * `0` is a legal value and is honoured: it disables browser tracing while
+   * leaving error reporting on. Anything outside `[0, 1]` (or `NaN`) is a
+   * programming error — it is logged loudly and the default is used, rather
+   * than silently shipping a rate nobody chose.
+   *
+   * Precedence: this option > `NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE` > default.
+   */
+  tracesSampleRate?: number;
 }
 
 /** Replay knobs handed to whichever integration factory ends up being used. */
@@ -134,9 +154,11 @@ export function initClientCore({ options, replay, eagerReplay }: InitClientCoreP
     replayCdnBaseUrl,
     replayScriptNonce,
     sendDefaultPii = false,
+    tracesSampleRate,
   } = options;
 
   const isEnabled = SENTRY_ENABLED && (enabled?.() ?? true);
+  const tracesRate = resolveTracesRate(tracesSampleRate);
   // `true` and `"lazy"` both record; only `false` turns Replay off entirely.
   const replayEnabled = replay !== false;
   const replayEager = replay === true && eagerReplay !== null;
@@ -150,7 +172,7 @@ export function initClientCore({ options, replay, eagerReplay }: InitClientCoreP
     environment: SENTRY_ENVIRONMENT,
     release:
       process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ?? process.env.VERCEL_GIT_COMMIT_SHA,
-    tracesSampler: createTracesSampler(SENTRY_TRACES_SAMPLE_RATE),
+    tracesSampler: createTracesSampler(tracesRate),
     // Rates are identical between `true` and `"lazy"`: the integration reads
     // them off the client options whenever it is set up — at init, or later.
     replaysSessionSampleRate: replayEnabled ? SENTRY_REPLAYS_SESSION_SAMPLE_RATE : 0,
@@ -179,6 +201,30 @@ export function initClientCore({ options, replay, eagerReplay }: InitClientCoreP
   if (replayEnabled && !replayEager && isEnabled) {
     scheduleLazyReplay(tuning, replayScriptNonce);
   }
+}
+
+/**
+ * Resolve the browser traces rate from the explicit option, falling back to
+ * {@link SENTRY_BROWSER_TRACES_SAMPLE_RATE}.
+ *
+ * `undefined` means "not supplied" and takes the default. `0` is a real choice
+ * and is kept — hence `?? `-style handling rather than a truthiness test, which
+ * would have silently turned "no browser tracing" into "trace everything".
+ *
+ * An out-of-range number is NOT quietly coerced. Clamping a typo'd `10` down to
+ * `1` would ship 10× the intended volume under the appearance of working, and
+ * dropping it to `0` would kill tracing on an app that asked for more of it.
+ * Both are the failure this whole change exists to end, so the caller gets a
+ * loud `console.error` and the documented default.
+ */
+function resolveTracesRate(rate: number | undefined): number {
+  if (rate === undefined) return SENTRY_BROWSER_TRACES_SAMPLE_RATE;
+  if (Number.isFinite(rate) && rate >= 0 && rate <= 1) return rate;
+  console.error(
+    `[sentry-config] initSentryClient: tracesSampleRate must be a number in [0, 1], got ${String(rate)}. ` +
+      `Falling back to the default (${SENTRY_BROWSER_TRACES_SAMPLE_RATE}).`,
+  );
+  return SENTRY_BROWSER_TRACES_SAMPLE_RATE;
 }
 
 /**

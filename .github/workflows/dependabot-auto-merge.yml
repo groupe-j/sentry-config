@@ -433,38 +433,67 @@ jobs:
             state=$(echo "$pr" | jq -r '.mergeStateStatus')
             labeled=$(echo "$pr" | jq -r --arg L "$LABEL" 'any(.labels[]?; .name == $L)')
 
+            # ── Autorisation SPÉCIFIQUE AU SHA (même principe que le job 2) ──
+            # Le job `merge` ne se fie JAMAIS au label seul : avant de merger il
+            # exige que le verdict semver ait été rendu POUR LE SHA qu'il merge
+            # (le check run du job `label`, attaché à `$HEAD_SHA`). Ce job-ci ne
+            # peut pas lire ce check run — il est absent par définition sur les
+            # PRs que le déclencheur `pull_request` n'a jamais vues, c'est toute
+            # sa raison d'être — mais il dispose de la MÊME autorité liée au
+            # commit : le bloc `updated-dependencies:` du message du commit
+            # `$oid`, signé par GitHub. Le verdict est donc RECALCULÉ sur le
+            # head courant à chaque passe, étiquetée ou non.
+            #
+            # ⚠️ NE PAS remettre ce bloc à l'intérieur d'un test sur `$labeled`.
+            # C'était la forme précédente, et elle rouvrait le fail-open que ce
+            # fichier existe pour fermer : le label est un état de PR, pas un
+            # état de COMMIT. Une PR étiquetée mineure puis mise à jour EN PLACE
+            # vers une majeure conserve son label (Dependabot recycle la branche
+            # — scénario documenté plus bas dans ce même job), et le
+            # `gh pr merge` de fin de boucle s'exécute inconditionnellement : on
+            # mergeait la majeure sur la seule foi d'un label périmé et d'une CI
+            # verte. Idem pour un push de mainteneur, qui fait *skipper* le job
+            # `label` en laissant survivre le label d'un SHA antérieur.
+            # `tests/dependabot-templates.test.ts` échoue si l'imbrication
+            # revient.
+
+            # Tester le CODE DE RETOUR, pas la sortie : `gh api` imprime son
+            # 404 sur stdout, et `--jq '.champ'` renvoie alors `null` — une
+            # chaine non vide qui ferait conclure « present » a un test `-n`.
+            if ! commit=$(gh api "repos/${REPO}/commits/${oid}" \
+                 --jq '{login: (.author.login // ""), verified: .commit.verification.verified, msg: .commit.message}'); then
+              echo "PR #$number : commit $oid illisible — indecidable, pas de merge."
+              continue
+            fi
+
+            login=$(echo "$commit" | jq -r '.login')
+            verified=$(echo "$commit" | jq -r '.verified')
+            if [ "$login" != "dependabot[bot]" ] || [ "$verified" != "true" ]; then
+              echo "PR #$number : head $oid non signe par Dependabot (login='$login', verified='$verified') — pas de merge."
+              continue
+            fi
+
+            # `|| true` cantonne a CE grep : son seul mode d'echec est « aucune
+            # correspondance », et le cas vide est traite explicitement juste
+            # apres. Ne pas l'etendre au reste du pipeline.
+            semver=$(echo "$commit" | jq -r '.msg' \
+              | grep -oE 'semver-(major|minor|patch)' | sort -u || true)
+
+            if [ -z "$semver" ]; then
+              echo "PR #$number : aucune metadonnee semver sur le head $oid — indecidable, pas de merge (review manuelle)."
+              continue
+            fi
+            if echo "$semver" | grep -q 'semver-major'; then
+              echo "PR #$number : le head $oid contient un saut MAJEUR — jamais auto-mergee."
+              if [ "$labeled" = "true" ]; then
+                # Exactement le cas que l'ancienne structure laissait passer.
+                echo "::warning::PR #$number porte '$LABEL' alors que son head $oid est MAJEUR — label perime (pose sur un SHA anterieur), merge refuse."
+              fi
+              continue
+            fi
+
+            # Seul l'ÉTIQUETAGE est conditionnel au label ; jamais la vérification.
             if [ "$labeled" != "true" ]; then
-              # Tester le CODE DE RETOUR, pas la sortie : `gh api` imprime son
-              # 404 sur stdout, et `--jq '.champ'` renvoie alors `null` — une
-              # chaine non vide qui ferait conclure « present » a un test `-n`.
-              if ! commit=$(gh api "repos/${REPO}/commits/${oid}" \
-                   --jq '{login: (.author.login // ""), verified: .commit.verification.verified, msg: .commit.message}'); then
-                echo "PR #$number : commit $oid illisible — skip."
-                continue
-              fi
-
-              login=$(echo "$commit" | jq -r '.login')
-              verified=$(echo "$commit" | jq -r '.verified')
-              if [ "$login" != "dependabot[bot]" ] || [ "$verified" != "true" ]; then
-                echo "PR #$number : head non signe par Dependabot (login='$login', verified='$verified') — skip."
-                continue
-              fi
-
-              # `|| true` cantonne a CE grep : son seul mode d'echec est « aucune
-              # correspondance », et le cas vide est traite explicitement juste
-              # apres. Ne pas l'etendre au reste du pipeline.
-              semver=$(echo "$commit" | jq -r '.msg' \
-                | grep -oE 'semver-(major|minor|patch)' | sort -u || true)
-
-              if [ -z "$semver" ]; then
-                echo "PR #$number : aucune metadonnee semver dans le message de commit — skip (review manuelle)."
-                continue
-              fi
-              if echo "$semver" | grep -q 'semver-major'; then
-                echo "PR #$number : contient un saut MAJEUR — jamais auto-mergee."
-                continue
-              fi
-
               gh pr edit "$number" --repo "$REPO" --add-label "$LABEL"
               echo "PR #$number : etiquetee ($(echo "$semver" | tr '\n' ' '))."
             fi

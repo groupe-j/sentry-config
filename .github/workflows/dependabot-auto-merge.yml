@@ -29,9 +29,26 @@ name: Dependabot auto-merge
 
 on:
   pull_request:
+    # ⚠️ Déclarer `types:` REMPLACE le défaut (`opened`/`synchronize`/`reopened`) :
+    # les réénumérer est obligatoire, sinon le job `label` ne tourne plus du tout.
+    #
+    # `edited` est requis pour le retargetage de base : sans lui, une PR Dependabot
+    # dont on change la base (`gh pr edit --base staging`) ne repasse jamais par
+    # `label`, donc perd son label d'auto-merge et reste bloquée en silence.
+    # Le job `label` est bon marché (fetch-metadata + pose d'un label), donc les
+    # déclenchements supplémentaires sur édition de titre/corps sont sans effet
+    # notable sur les minutes CI.
+    types: [opened, synchronize, reopened, edited]
   workflow_run:
     workflows: ["CI"]
     types: [completed]
+  # Rattrapage du stock : voir le job `catch-up`. Le declencheur
+  # `pull_request` ne peut PAS voir une PR deja ouverte au moment ou ce
+  # workflow est depose sur le depot — sans passe periodique, ce stock est
+  # orphelin sans limite de duree.
+  workflow_dispatch:
+  schedule:
+    - cron: "23 7 * * *" # quotidien, apres la fenetre Dependabot
 
 # Défaut minimal (lecture seule) ; chaque job élève ce dont il a besoin.
 permissions:
@@ -325,4 +342,169 @@ jobs:
           # de CE SHA a été rendu. Renommer l'un sans l'autre rend le job `merge`
           # rouge (`absent`) — bruyant, donc visible, par construction.
           LABEL_JOB: Label auto-mergeable Dependabot PRs
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── 3. Contexte schedule / workflow_dispatch : RATTRAPAGE du stock ────────
+  #
+  # POURQUOI ce job existe.
+  #   Les jobs 1 et 2 ne se déclenchent que sur des ÉVÉNEMENTS de PR :
+  #   `pull_request` (label) et la fin de CI d'une PR (merge). Une PR déjà
+  #   ouverte au moment où ce workflow est déposé sur le dépôt n'émet aucun de
+  #   ces événements tant que Dependabot ne la retouche pas — elle est
+  #   structurellement invisible pour l'auto-merge, sans limite de durée.
+  #   Mesuré le 2026-08-01 sur l'org : 24 PRs Dependabot ouvertes antérieures au
+  #   dépôt de ce workflow sur leur propre dépôt, dont 9 minor/patch jamais
+  #   étiquetées. Le cas fondateur est ridesamui-t3#600 (correctif de sécurité
+  #   tarteaucitronjs, ouvert le 2026-07-11, workflow déposé le 2026-07-25) :
+  #   trois semaines de sommeil.
+  #
+  # CE QU'IL FAIT DE DIFFÉRENT.
+  #   Il ne peut pas utiliser `dependabot/fetch-metadata` (l'action EXIGE le
+  #   contexte `pull_request`). Il relit donc la MÊME source que l'action : le
+  #   bloc `updated-dependencies:` que Dependabot écrit dans le MESSAGE DE
+  #   COMMIT. Ce message est lisible par l'API dans n'importe quel contexte, et
+  #   le commit est signé par GitHub — on exige la signature ET l'auteur avant
+  #   d'en tirer une conclusion semver.
+  #   Il ne peut pas non plus s'appuyer sur le check run du job `label` (absent
+  #   par définition sur ces PRs) : il relit l'état COURANT de la CI sur le head
+  #   COURANT, et n'accepte que `SUCCESS`/`SKIPPED`/`NEUTRAL` sur la totalité
+  #   des checks — jamais un rollup vide.
+  #
+  # INVARIANT INCHANGÉ : une MAJEURE n'est jamais étiquetée ni mergée.
+  catch-up:
+    name: Catch-up on pre-existing Dependabot PRs
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write # requis par `gh label create` (API labels = surface Issues)
+      # `gh pr view --json statusCheckRollup` passe par GraphQL et lit DEUX
+      # surfaces distinctes : les check runs (Actions) ET les commit statuses
+      # (Vercel & autres integrations). Sans ces deux scopes le champ renvoie
+      # « Resource not accessible by integration » et, sous `set -e`, fait
+      # ECHOUER le rattrapage — constate sur groupe-j/namecheck-v2 (run
+      # 30687579048). Le job `merge` n'en avait pas besoin : il lit les checks
+      # en REST (`/commits/{sha}/check-runs`), ou `checks: read` suffit.
+      #
+      # `actions: read` est requis EN PLUS : la requete que `gh` construit pour
+      # `statusCheckRollup` descend jusqu'a `checkSuite.workflowRun`, qui releve
+      # de la surface Actions. Sans lui l'erreur se deplace simplement d'un cran
+      # plus bas (constate sur namecheck-v2 run 30687978319 et mirey run
+      # 30687979238) — les trois scopes sont necessaires ensemble.
+      checks: read
+      statuses: read
+      actions: read
+    steps:
+      - name: Label + merge les PRs que le declencheur pull_request n'a jamais vues
+        run: |
+          set -euo pipefail
+
+          gh label create "$LABEL" \
+            --repo "$REPO" \
+            --color "0e8a16" \
+            --description "Dependabot minor/patch cleared for auto-merge once CI is green (GRO-625)" \
+            --force
+
+          # Garde auteur : meme test ancre + `is_bot` que le job `merge`. Ne pas
+          # revenir a une egalite en dur sur `dependabot[bot]` — ce format a deja
+          # change une fois (`app/dependabot` depuis gh 2.86) et a rendu le job
+          # `merge` inerte pendant trois semaines sous un `exit 0` vert.
+          gh pr list \
+            --repo "$REPO" \
+            --state open \
+            --limit 100 \
+            --json number,author,labels,headRefOid,mergeStateStatus \
+          | jq -c '.[]
+              | select(.author.is_bot == true)
+              | select(.author.login | test("^(app/)?dependabot(\\[bot\\])?$"))' \
+          > "$RUNNER_TEMP/dependabot-prs.jsonl"
+
+          count=$(wc -l < "$RUNNER_TEMP/dependabot-prs.jsonl")
+          echo "PRs Dependabot ouvertes : $count"
+          merged=0
+
+          # Lecture sur le descripteur 3, pas sur stdin : les `gh` appeles dans
+          # la boucle heriteraient sinon du fichier comme entree standard et
+          # pourraient en consommer des lignes.
+          while read -r pr <&3; do
+            number=$(echo "$pr" | jq -r '.number')
+            oid=$(echo "$pr" | jq -r '.headRefOid')
+            state=$(echo "$pr" | jq -r '.mergeStateStatus')
+            labeled=$(echo "$pr" | jq -r --arg L "$LABEL" 'any(.labels[]?; .name == $L)')
+
+            if [ "$labeled" != "true" ]; then
+              # Tester le CODE DE RETOUR, pas la sortie : `gh api` imprime son
+              # 404 sur stdout, et `--jq '.champ'` renvoie alors `null` — une
+              # chaine non vide qui ferait conclure « present » a un test `-n`.
+              if ! commit=$(gh api "repos/${REPO}/commits/${oid}" \
+                   --jq '{login: (.author.login // ""), verified: .commit.verification.verified, msg: .commit.message}'); then
+                echo "PR #$number : commit $oid illisible — skip."
+                continue
+              fi
+
+              login=$(echo "$commit" | jq -r '.login')
+              verified=$(echo "$commit" | jq -r '.verified')
+              if [ "$login" != "dependabot[bot]" ] || [ "$verified" != "true" ]; then
+                echo "PR #$number : head non signe par Dependabot (login='$login', verified='$verified') — skip."
+                continue
+              fi
+
+              # `|| true` cantonne a CE grep : son seul mode d'echec est « aucune
+              # correspondance », et le cas vide est traite explicitement juste
+              # apres. Ne pas l'etendre au reste du pipeline.
+              semver=$(echo "$commit" | jq -r '.msg' \
+                | grep -oE 'semver-(major|minor|patch)' | sort -u || true)
+
+              if [ -z "$semver" ]; then
+                echo "PR #$number : aucune metadonnee semver dans le message de commit — skip (review manuelle)."
+                continue
+              fi
+              if echo "$semver" | grep -q 'semver-major'; then
+                echo "PR #$number : contient un saut MAJEUR — jamais auto-mergee."
+                continue
+              fi
+
+              gh pr edit "$number" --repo "$REPO" --add-label "$LABEL"
+              echo "PR #$number : etiquetee ($(echo "$semver" | tr '\n' ' '))."
+            fi
+
+            # ── Memes gardes de merge que le job 2, mais la CI est RELUE ────
+            if [ "$state" != "CLEAN" ]; then
+              echo "PR #$number : mergeStateStatus='$state' (attendu CLEAN) — skip."
+              continue
+            fi
+
+            rollup=$(gh pr view "$number" --repo "$REPO" --json statusCheckRollup,headRefOid)
+            if [ "$(echo "$rollup" | jq -r '.headRefOid')" != "$oid" ]; then
+              echo "PR #$number : le head a bouge pendant la passe — skip."
+              continue
+            fi
+
+            total=$(echo "$rollup" | jq '[.statusCheckRollup[]?] | length')
+            bad=$(echo "$rollup" | jq '[.statusCheckRollup[]?
+                    | (.conclusion // .state // "PENDING")
+                    | select(. != "SUCCESS" and . != "SKIPPED" and . != "NEUTRAL")] | length')
+
+            # Un rollup VIDE n'est pas une CI verte : c'est l'absence de preuve.
+            # Le refuser explicitement evite de rejouer le fail-open de
+            # `gh pr merge --auto` sur un depot sans required checks.
+            if [ "$total" -eq 0 ]; then
+              echo "PR #$number : aucun check sur $oid — absence de preuve, pas de merge."
+              continue
+            fi
+            if [ "$bad" -ne 0 ]; then
+              echo "PR #$number : $bad/$total checks non verts — skip."
+              continue
+            fi
+
+            echo "PR #$number : minor/patch + $total checks verts sur $oid → merge."
+            gh pr merge "$number" --repo "$REPO" --squash --delete-branch --match-head-commit "$oid"
+            merged=$((merged + 1))
+          done 3< "$RUNNER_TEMP/dependabot-prs.jsonl"
+
+          echo "Rattrapage termine : $merged PR(s) mergee(s) sur $count examinee(s)."
+        env:
+          REPO: ${{ github.repository }}
+          LABEL: dependabot-auto-merge-ok
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

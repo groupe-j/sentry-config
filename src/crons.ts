@@ -60,10 +60,30 @@ export interface CronMonitorOptions {
 }
 
 /**
+ * Is this handler result a `Response` that reports a server error?
+ *
+ * `R` is unconstrained, so the test must be safe for *any* value — a plain
+ * object, `undefined`, `null`, a number. Hence `instanceof Response` first:
+ * only then is reading `.status` legal. Never an optimistic property access.
+ *
+ * The bound is `>= 500`: 500, 503 and 599 are failures; 499 is not.
+ */
+function isServerErrorResponse(result: unknown): boolean {
+  return result instanceof Response && result.status >= 500;
+}
+
+/**
  * Wraps a Next.js route handler (typically a cron GET) with Sentry monitoring.
  *
  * Returns a new handler with identical signature. The Sentry check-in lifecycle
  * is fully transparent to the wrapped function.
+ *
+ * Why manual check-ins instead of `Sentry.withMonitor`: `withMonitor` only
+ * reports "error" when its callback *throws*. A route handler that **returns**
+ * a 500 `Response` terminates normally, so the check-in went out as "ok" on a
+ * failed run. Making the wrapper throw instead would turn a clean 500 into an
+ * unhandled exception and break the route — so we point the status by hand and
+ * hand the caller its `Response` back untouched.
  */
 export function withCronMonitor<Args extends unknown[], R>(
   monitorSlug: string,
@@ -71,17 +91,38 @@ export function withCronMonitor<Args extends unknown[], R>(
   options: CronMonitorOptions,
 ): (...args: Args) => Promise<R> {
   return async (...args: Args): Promise<R> => {
-    return Sentry.withMonitor(
-      monitorSlug,
-      async () => handler(...args),
-      {
-        schedule: { type: "crontab", value: options.schedule },
-        maxRuntime: options.maxRuntimeMinutes ?? 30,
-        checkinMargin: options.checkinMarginMinutes ?? 5,
-        timezone: options.timezone ?? "UTC",
-        failureIssueThreshold: options.failureIssueThreshold ?? 1,
-        recoveryThreshold: options.recoveryThreshold ?? 1,
-      },
+    const monitorConfig = {
+      schedule: { type: "crontab", value: options.schedule },
+      maxRuntime: options.maxRuntimeMinutes ?? 30,
+      checkinMargin: options.checkinMarginMinutes ?? 5,
+      timezone: options.timezone ?? "UTC",
+      failureIssueThreshold: options.failureIssueThreshold ?? 1,
+      recoveryThreshold: options.recoveryThreshold ?? 1,
+    } as const;
+
+    const checkInId = Sentry.captureCheckIn(
+      { monitorSlug, status: "in_progress" },
+      monitorConfig,
     );
+    const startedAt = Date.now();
+    const finishCheckIn = (status: "ok" | "error"): void => {
+      Sentry.captureCheckIn({
+        monitorSlug,
+        status,
+        checkInId,
+        duration: (Date.now() - startedAt) / 1000,
+      });
+    };
+
+    let result: R;
+    try {
+      result = await handler(...args);
+    } catch (error) {
+      finishCheckIn("error");
+      throw error;
+    }
+
+    finishCheckIn(isServerErrorResponse(result) ? "error" : "ok");
+    return result;
   };
 }

@@ -259,20 +259,41 @@ var DEFAULT_DENY_URLS = [
   /^safari-extension:\/\//i,
   /^safari-web-extension:\/\//i
 ];
+function isServerErrorResponse(result) {
+  return result instanceof Response && result.status >= 500;
+}
 function withCronMonitor(monitorSlug, handler, options) {
   return async (...args) => {
-    return Sentry.withMonitor(
-      monitorSlug,
-      async () => handler(...args),
-      {
-        schedule: { type: "crontab", value: options.schedule },
-        maxRuntime: options.maxRuntimeMinutes ?? 30,
-        checkinMargin: options.checkinMarginMinutes ?? 5,
-        timezone: options.timezone ?? "UTC",
-        failureIssueThreshold: options.failureIssueThreshold ?? 1,
-        recoveryThreshold: options.recoveryThreshold ?? 1
-      }
+    const monitorConfig = {
+      schedule: { type: "crontab", value: options.schedule },
+      maxRuntime: options.maxRuntimeMinutes ?? 30,
+      checkinMargin: options.checkinMarginMinutes ?? 5,
+      timezone: options.timezone ?? "UTC",
+      failureIssueThreshold: options.failureIssueThreshold ?? 1,
+      recoveryThreshold: options.recoveryThreshold ?? 1
+    };
+    const checkInId = Sentry.captureCheckIn(
+      { monitorSlug, status: "in_progress" },
+      monitorConfig
     );
+    const startedAt = Date.now();
+    const finishCheckIn = (status) => {
+      Sentry.captureCheckIn({
+        monitorSlug,
+        status,
+        checkInId,
+        duration: (Date.now() - startedAt) / 1e3
+      });
+    };
+    let result;
+    try {
+      result = await handler(...args);
+    } catch (error) {
+      finishCheckIn("error");
+      throw error;
+    }
+    finishCheckIn(isServerErrorResponse(result) ? "error" : "ok");
+    return result;
   };
 }
 

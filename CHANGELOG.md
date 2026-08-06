@@ -3,6 +3,48 @@
 All notable changes to `@groupe-j/sentry-config` are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] - 2026-08-06
+
+### Fixed
+
+- **`withCronMonitor` pointait « ok » sur un cron en échec** quand le
+  gestionnaire **renvoyait** une `Response` 5xx au lieu de lever.
+
+  `Sentry.withMonitor` ne signale une erreur que si son rappel **lève**. Un
+  route handler qui fait `return new Response(null, { status: 500 })` se termine
+  normalement : le check-in partait en `ok`. Les 63 crons du portefeuille
+  n'étaient corrects que par **convention** (relancer l'erreur), sans aucune
+  garantie côté enveloppe — et un cas réel enfreignait déjà la convention :
+  `generate-blog` de `megahote` rend un 500.
+
+  L'enveloppe passe désormais par le **pointage manuel**
+  (`Sentry.captureCheckIn`), qui laisse choisir le statut :
+
+  1. `captureCheckIn({ monitorSlug, status: "in_progress" }, monitorConfig)` ;
+  2. exécution du gestionnaire ;
+  3. résultat `instanceof Response` avec `status >= 500` → `status: "error"`,
+     **et la `Response` est rendue telle quelle** — la route continue de
+     répondre 500 à l'appelant ;
+  4. sinon → `status: "ok"` ;
+  5. le gestionnaire lève → `status: "error"` puis **relance**.
+
+  Faire lever l'enveloppe aurait transformé un 500 propre en exception non
+  gérée et cassé la route : ce n'est délibérément pas la solution retenue.
+
+  `R` n'étant pas contraint à `Response`, le test 5xx est `instanceof Response`
+  **puis** lecture de `.status` — jamais un accès optimiste : un gestionnaire
+  qui rend `undefined` ou un objet quelconque pointe `ok` sans lever.
+
+  Aucun changement de signature ni d'API : patch. Les crons qui levaient déjà
+  se comportent exactement comme avant ; seuls ceux qui **rendaient** un 5xx
+  changent d'état — c'est précisément le défaut corrigé.
+
+  Note bundler : `captureCheckIn` est, comme `withMonitor`, absent du build
+  navigateur de `@sentry/nextjs` (`@sentry/browser` ne le ré-exporte pas depuis
+  `@sentry/core/browser`). L'invariant de `client.test.ts` a été mis à jour en
+  conséquence — les entrées client doivent rester à l'écart de `crons.ts`, et le
+  code client passe toujours par le sous-chemin `/armed`.
+
 ## [1.0.0] - 2026-07-31
 
 ### Changed — BREAKING

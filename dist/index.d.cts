@@ -171,6 +171,13 @@ interface CronMonitorOptions {
  *
  * Returns a new handler with identical signature. The Sentry check-in lifecycle
  * is fully transparent to the wrapped function.
+ *
+ * Why manual check-ins instead of `Sentry.withMonitor`: `withMonitor` only
+ * reports "error" when its callback *throws*. A route handler that **returns**
+ * a 500 `Response` terminates normally, so the check-in went out as "ok" on a
+ * failed run. Making the wrapper throw instead would turn a clean 500 into an
+ * unhandled exception and break the route — so we point the status by hand and
+ * hand the caller its `Response` back untouched.
  */
 declare function withCronMonitor<Args extends unknown[], R>(monitorSlug: string, handler: (...args: Args) => Promise<R>, options: CronMonitorOptions): (...args: Args) => Promise<R>;
 

@@ -500,16 +500,27 @@ describe("bundle-size invariant — client-lazy must never reference replayInteg
   /**
    * Build invariant, separate from the byte-size one above.
    *
-   * `Sentry.withMonitor` (crons) and `Sentry.trpcMiddleware` (tRPC) do not
-   * exist in the browser build of `@sentry/nextjs`. A bundler that has to
-   * resolve either against the client condition fails the build outright —
-   * which is exactly what happened to businessfamily on 2026-07-31, through the
-   * package **barrel** (`index.ts` re-exports both). Client entry points must
-   * therefore stay clear of them, and `armed.ts` — the module client code
-   * actually wants from the barrel — must keep importing nothing at all so its
-   * own `/armed` subpath is safe from every runtime.
+   * `Sentry.captureCheckIn` / `Sentry.withMonitor` (crons) and
+   * `Sentry.trpcMiddleware` (tRPC) do not exist in the browser build of
+   * `@sentry/nextjs`. A bundler that has to resolve any of them against the
+   * client condition fails the build outright — which is exactly what happened
+   * to businessfamily on 2026-07-31, through the package **barrel**
+   * (`index.ts` re-exports both). Client entry points must therefore stay clear
+   * of them, and `armed.ts` — the module client code actually wants from the
+   * barrel — must keep importing nothing at all so its own `/armed` subpath is
+   * safe from every runtime.
+   *
+   * Verified against `@sentry/browser@10.68.0`: its `build/npm/types/exports.d.ts`
+   * re-exports an *explicit named list* from `@sentry/core/browser` which
+   * carries `captureException` but neither `captureCheckIn` nor `withMonitor` —
+   * both live in `@sentry/core`'s `shared-exports`, off the browser list.
    */
-  const SERVER_ONLY_SDK_MEMBERS = ["withMonitor", "trpcMiddleware", "prismaIntegration"] as const;
+  const SERVER_ONLY_SDK_MEMBERS = [
+    "captureCheckIn",
+    "withMonitor",
+    "trpcMiddleware",
+    "prismaIntegration",
+  ] as const;
 
   it("no module reachable from a client entry touches a server-only SDK member", () => {
     for (const entry of ["client.ts", "client-lazy.ts", "armed.ts"]) {
@@ -535,6 +546,6 @@ describe("bundle-size invariant — client-lazy must never reference replayInteg
     const barrel = localGraph("index.ts");
     expect(barrel).toContain("crons.ts");
     expect(barrel).toContain("trpc-middleware.ts");
-    expect(code("crons.ts")).toMatch(/Sentry\s*\.\s*withMonitor/);
+    expect(code("crons.ts")).toMatch(/Sentry\s*\.\s*captureCheckIn/);
   });
 });

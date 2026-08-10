@@ -77,6 +77,19 @@ updates:
         patterns: ["@trpc/*"]
     ignore:
       # Contrôle manuel sur les majors critiques (breaking changes potentiels)
+      # typescript : `tsup` EMBARQUE `rollup-plugin-dts@6.1.1` dans son artefact
+      # publié. Ce n'est ni une dépendance du lockfile ni un paquet de
+      # `node_modules` — aucune surcharge pnpm ne peut l'atteindre. Cette
+      # version ignore TypeScript 7 :
+      #   TS 7 -> TypeError: Cannot read properties of undefined
+      #           (reading 'useCaseSensitiveFileNames')
+      #   TS 6 -> error TS5101 (baseUrl injecté par tsup), levable par
+      #           `"ignoreDeprecations": "6.0"` dans tsconfig.json
+      # `tsup@8.5.1` est la dernière version publiée (2025-11-12).
+      # Condition de sortie : un tsup vendorant `rollup-plugin-dts` >= 6.5.0,
+      # dont la peer accepte `^7`. Cf. GRO-249.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
       - dependency-name: "react"
         update-types: ["version-update:semver-major"]
       - dependency-name: "react-dom"

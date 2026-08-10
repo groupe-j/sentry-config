@@ -95,6 +95,7 @@
     "overrides": {
       "brace-expansion@1": "^1.1.18",
       "esbuild": "^0.28.1",
+      "js-yaml": "^4.3.1",
       "postcss@8": "^8.5.18",
       "sharp": "^0.35.0"
     }

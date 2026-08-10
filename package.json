@@ -1,6 +1,7 @@
 {
   "name": "@groupe-j/sentry-config",
   "version": "1.0.1",
+  "packageManager": "pnpm@10.34.5",
   "description": "Shared Sentry config + PII redaction for groupe-j apps. Extracted from ridesamui.",
   "type": "module",
   "main": "./dist/index.cjs",

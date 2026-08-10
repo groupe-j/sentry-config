@@ -12,9 +12,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+        # `packageManager` fait foi : pas de `version:` ici (action-setup@v6).
       - uses: pnpm/action-setup@v6
-        with:
-          version: 10
 
       - uses: actions/setup-node@v7
         with:

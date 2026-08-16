@@ -3,6 +3,58 @@
 All notable changes to `@groupe-j/sentry-config` are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [Non publié]
+
+### Added
+
+- **`replayConsent?: () => boolean`** — une grille de consentement **propre au
+  Replay**, évaluée à **chaque déclencheur d'accroche** et non à l'init.
+
+  Le besoin est celui d'archicollab, et il n'était exprimable avec aucune option
+  existante : **Sentry toujours actif** (intérêt légitime — sécurité et
+  disponibilité), **Replay seulement sur consentement**. `enabled` ne convient
+  pas deux fois : il éteint **tout** le SDK, et il est évalué **une seule fois,
+  à l'init** — c'est-à-dire avant le premier rendu React, donc avant qu'aucun
+  gestionnaire de consentement ne soit chargé. Lire le consentement à ce
+  moment-là, c'est le lire trop tôt : on n'enregistre jamais, ou on enregistre
+  quand même.
+
+  Faute de cette option, les applications concernées gardaient l'entrée
+  **eager** et refaisaient la grille à la main autour d'un
+  `Sentry.replayIntegration` **statique** — donc en conservant les ~124 Ko de
+  rrweb dans le chunk initial. Le report par `requestIdleCallback` diffère
+  l'**exécution**, jamais le **téléchargement** : c'est le piège déjà décrit
+  au-dessus de `ReplayMode`, rencontré en production sur trois applications.
+
+  ```ts
+  import { initSentryClient } from "@groupe-j/sentry-config/client-lazy";
+
+  initSentryClient({
+    app: "archicollab",
+    replayConsent: () => readConsentFromCookie(SENTRY_SERVICE_KEY),
+  });
+  ```
+
+  Détail d'implémentation qui porte la correction : **un refus ne consomme pas
+  de tentative**. La garde `attempts >= MAX_ATTEMPTS` borne les reprises à 2 ;
+  si un refus comptait, deux refus verrouilleraient la page entière et un
+  consentement accordé ensuite ne serait plus jamais honoré — la garde écrite
+  pour borner les échecs réseau se retournerait contre le consentement.
+  Vérifié par mutation : déplacer la grille après `attempts += 1` fait tomber
+  exactement 1 test sur 32. La première version de ce test **ne mordait pas**
+  (un seul refus n'atteint pas le plafond) ; il en faut deux.
+
+  ⚠️ Limite assumée, écrite dans la JSDoc plutôt que découverte : le
+  déclencheur « idle après `load` » ne se produit qu'une fois. Consentement
+  accordé **puis** erreur → le Replay s'accroche ; consentement accordé sans
+  aucun déclencheur ultérieur → pas de Replay pour cette vue de page, reprise à
+  la navigation suivante. L'écart est délibérément du côté de « ne pas
+  enregistrer ».
+
+  Sans effet sur les consommateurs existants : option facultative, comportement
+  inchangé quand elle est absente. Ignorée en Replay eager, où il n'y a pas
+  d'étape d'accroche à filtrer.
+
 ## [1.0.1] - 2026-08-06
 
 ### Fixed

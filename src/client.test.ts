@@ -412,6 +412,76 @@ describe("/client-lazy — lazy entry point", () => {
     expect(lazyLoadIntegrationMock).toHaveBeenCalledTimes(2);
   });
 
+  it("replayConsent refusé : rien n'est téléchargé, et Sentry reste actif", async () => {
+    // Le cas qui bloquait l'adoption : erreurs sur intérêt légitime, Replay sur
+    // consentement. `enabled` ne sait pas l'exprimer — il éteint tout.
+    stubBrowser({ idle: true, loaded: true });
+    const { initSentryClient } = await loadLazy();
+    initSentryClient({ app: "probe", replayConsent: () => false });
+
+    await new Promise((r) => setTimeout(r, 10));
+    expect(lazyLoadIntegrationMock).not.toHaveBeenCalled();
+    expect(addIntegrationMock).not.toHaveBeenCalled();
+    // Sentry lui-même n'est PAS éteint : c'est toute la différence avec `enabled`.
+    expect(initOptions().enabled).toBe(true);
+  });
+
+  it("replayConsent accordé : le Replay s'accroche normalement", async () => {
+    stubBrowser({ idle: true, loaded: true });
+    const { initSentryClient } = await loadLazy();
+    initSentryClient({ app: "probe", replayConsent: () => true });
+
+    await vi.waitFor(() => expect(addIntegrationMock).toHaveBeenCalledTimes(1));
+    expect(lazyLoadIntegrationMock).toHaveBeenCalledWith("replayIntegration", undefined);
+  });
+
+  it("un refus NE CONSOMME PAS de tentative — un consentement tardif reste honoré", async () => {
+    // Le vrai piège de cette option. La garde `attempts >= MAX_ATTEMPTS` borne
+    // les reprises à 2. Si un refus comptait comme une tentative, DEUX refus
+    // suffiraient à verrouiller la page : l'utilisateur qui accepte ensuite ne
+    // serait plus jamais enregistré, par la garde même censée borner les échecs
+    // réseau.
+    //
+    // ⚠️ Il faut bien DEUX refus avant le consentement pour que ce test
+    // discrimine : avec un seul, le plafond n'est pas atteint et les deux
+    // placements de la grille passent. Vérifié par mutation — la première
+    // version de ce test ne mordait pas.
+    let consenti = false;
+    const { fireLoad } = stubBrowser({ idle: true });
+    const { initSentryClient } = await loadLazy();
+    initSentryClient({ app: "probe", replayConsent: () => consenti });
+
+    // Refus n° 1 — déclencheur « idle après load ».
+    fireLoad();
+    await new Promise((r) => setTimeout(r, 10));
+    // Refus n° 2 — déclencheur « première erreur ».
+    clientHooks.beforeSendEvent?.({ exception: { values: [] } });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(lazyLoadIntegrationMock).not.toHaveBeenCalled();
+
+    // L'utilisateur accepte, puis une nouvelle erreur survient : le Replay doit
+    // encore pouvoir s'accrocher.
+    consenti = true;
+    clientHooks.beforeSendEvent?.({ exception: { values: [] } });
+    await vi.waitFor(() => expect(addIntegrationMock).toHaveBeenCalledTimes(1));
+  });
+
+  it("replayConsent est réévalué à CHAQUE déclencheur, pas mémorisé", async () => {
+    const consent = vi.fn(() => false);
+    const { fireLoad } = stubBrowser({ idle: true });
+    const { initSentryClient } = await loadLazy();
+    initSentryClient({ app: "probe", replayConsent: consent });
+
+    fireLoad();
+    await new Promise((r) => setTimeout(r, 10));
+    clientHooks.beforeSendEvent?.({ exception: { values: [] } });
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Deux déclencheurs, deux interrogations : une valeur mise en cache à
+    // l'init rendrait le consentement impossible à accorder après coup.
+    expect(consent.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("replay: false disables replay entirely and fetches nothing", async () => {
     stubBrowser({ idle: true, loaded: true });
     const { initSentryClient } = await loadLazy();

@@ -3,7 +3,7 @@
 All notable changes to `@groupe-j/sentry-config` are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
-## [Non publié]
+## [1.1.0] - 2026-08-16
 
 ### Added
 

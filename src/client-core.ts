@@ -58,6 +58,53 @@ export interface InitSentryClientBaseOptions {
   dsn?: string;
   /** Disable Sentry when this returns false (e.g. cookie consent gate). Evaluated once, at init. */
   enabled?: () => boolean;
+  /**
+   * Gate **Replay alone**, without gating Sentry. Return `false` to skip the
+   * attach; return `true` to allow it.
+   *
+   * ## Why this is not `enabled`
+   *
+   * `enabled` turns off the whole SDK and is evaluated **once, at init**. Two
+   * reasons that does not fit a consent banner:
+   *
+   * 1. **Error monitoring and session recording do not share a legal basis.**
+   *    Capturing errors is routinely run on legitimate interest — security and
+   *    availability — while recording a user's screen is not. An app that needs
+   *    "Sentry always, Replay only on consent" has no way to say so with
+   *    `enabled`, and the two apps that needed it hand-rolled the gate instead
+   *    (which is what kept them on the eager entry point, and on ~124 KB of
+   *    rrweb in the initial chunk).
+   * 2. **At init, the answer is not knowable yet.** `instrumentation-client.ts`
+   *    runs before the first React render, so before any consent manager has
+   *    loaded. Reading consent there means reading it too early — you either
+   *    never record, or you record regardless, and the second is worse.
+   *
+   * This callback is therefore evaluated **at each attach trigger** (idle after
+   * `load`, and again on a captured error), not at init. By then the consent
+   * cookie is readable.
+   *
+   * @example
+   * initSentryClient({
+   *   app: "archicollab",
+   *   // Sentry stays on: legitimate interest (security, availability).
+   *   // Replay waits for an explicit opt-in.
+   *   replayConsent: () => readConsentFromCookie(SENTRY_SERVICE_KEY),
+   * });
+   *
+   * ⚠️ **Known gap, stated rather than hidden.** A refusal does not consume an
+   * attach attempt, so consent granted *later* is still honoured — but only at
+   * the next trigger, and the idle-after-`load` trigger fires once. In practice
+   * that means: consent granted, then an error occurs → Replay attaches;
+   * consent granted, no error, no further trigger → no Replay for that page
+   * view. It resumes on the next navigation that reloads the document. Recording
+   * a user who has not (yet) agreed is the failure this option exists to
+   * prevent, so the gap is deliberately on the side of not recording.
+   *
+   * Ignored when Replay is eager (`@groupe-j/sentry-config/client` with
+   * `replay: true`): there is no attach step to gate. Gate that entry point with
+   * `replay: false` instead.
+   */
+  replayConsent?: () => boolean;
   /** Extra error patterns to ignore (merged with DEFAULT_IGNORED_ERRORS). */
   ignoreErrors?: (string | RegExp)[];
   /** Mask all text in Replay (default true — safe). Set false only if no PII risk. */
@@ -162,6 +209,7 @@ export function initClientCore({ options, replay, eagerReplay }: InitClientCoreP
     ignoreErrors = [],
     replayMaskAllText = true,
     replayBlockAllMedia = true,
+    replayConsent,
     tunnel,
     replayCdnBaseUrl,
     replayScriptNonce,
@@ -211,7 +259,7 @@ export function initClientCore({ options, replay, eagerReplay }: InitClientCoreP
   });
 
   if (replayEnabled && !replayEager && isEnabled) {
-    scheduleLazyReplay(tuning, replayScriptNonce);
+    scheduleLazyReplay(tuning, replayScriptNonce, replayConsent);
   }
 }
 
@@ -264,7 +312,11 @@ function resolveTracesRate(rate: number | undefined): number {
  * of. An app that must have replays for boot-time errors should import
  * `@groupe-j/sentry-config/client` and keep `replay: true`.
  */
-function scheduleLazyReplay(tuning: ReplayTuning, scriptNonce?: string): void {
+function scheduleLazyReplay(
+  tuning: ReplayTuning,
+  scriptNonce?: string,
+  replayConsent?: () => boolean,
+): void {
   if (typeof window === "undefined" || typeof document === "undefined") return;
 
   // Two triggers race for one attach. `pending` guards against a double fetch;
@@ -279,6 +331,12 @@ function scheduleLazyReplay(tuning: ReplayTuning, scriptNonce?: string): void {
 
   const attach = (): void => {
     if (pending || attached || attempts >= MAX_ATTEMPTS) return;
+    // Consent is checked HERE, at each trigger — not at init, where the answer
+    // is not knowable yet — and BEFORE `attempts` is incremented. A refusal
+    // must not burn one of the two attempts: otherwise a visitor who declines
+    // at the idle trigger and accepts a second later would be locked out for
+    // the whole page view by the very guard meant to cap retries.
+    if (replayConsent && !replayConsent()) return;
     pending = true;
     attempts += 1;
     // `lazyLoadIntegration` injects `<script src="<cdnBaseUrl>/<version>/replay.min.js">`

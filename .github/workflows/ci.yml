@@ -26,6 +26,12 @@ jobs:
           registry-url: "https://npm.pkg.github.com"
           scope: "@groupe-j"
 
+      - name: Auth GitHub Packages
+        # pnpm >= 10.34.5 n'expanse plus les variables d'environnement dans les
+        # identifiants de registre lus depuis un .npmrc de PROJET. Seule la
+        # config utilisateur est encore expansee. Voir GRO-1093.
+        run: pnpm config set "//npm.pkg.github.com/:_authToken" "${{ secrets.NPM_TOKEN }}"
+
       - name: Install
         run: pnpm install --frozen-lockfile
         env:

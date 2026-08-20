@@ -45,7 +45,70 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # NPM_TOKEN n'a que `read:packages` : il sert a INSTALLER les @groupe-j,
+      # pas a publier. Depuis GRO-1093 l'auth est posee dans la config
+      # UTILISATEUR de pnpm, qui l'emporte sur `NODE_AUTH_TOKEN` — la ligne
+      # `env:` de l'etape Publish etait donc devenue inerte et la publication
+      # repartait avec le jeton en lecture seule (403 « does not match expected
+      # scopes », observe sur sanity-blog-schemas v0.3.0). On re-pose donc
+      # explicitement le jeton d'ECRITURE juste avant de publier. Voir GRO-1114.
+      - name: Auth GitHub Packages (ecriture)
+        run: pnpm config set "//npm.pkg.github.com/:_authToken" "${{ secrets.GITHUB_TOKEN }}"
+
+      # Oracle precoce (GRO-1114). Un publish.yml ne se declenche que sur une
+      # publication reelle : aucune PR ne l'exerce, donc une auth cassee reste
+      # invisible jusqu'au 403 final de `pnpm publish` — six mois plus tard, le
+      # jour ou on a besoin de publier. Cette etape echoue ICI, avant de
+      # publier, en nommant la cause.
+      #
+      # On lit le fichier de config UTILISATEUR que `pnpm config set` vient
+      # d'ecrire : c'est la source dont pnpm tirera reellement l'identifiant.
+      # (`pnpm config get` ne convient pas : il refuse de rendre une valeur
+      # `_authToken`, « option is protected, and cannot be retrieved in this
+      # way ».)
+      - name: Verifier l'auth d'ecriture (oracle)
+        env:
+          WRITE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          READ_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          cfg="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          if [ ! -f "$cfg" ]; then
+            echo "::error title=Auth publication::Config utilisateur pnpm introuvable ($cfg) : la publication partirait NON authentifiee."
+            exit 1
+          fi
+
+          effective="$(sed -n 's|^//npm\.pkg\.github\.com/:_authToken=||p' "$cfg" | tail -1 | tr -d '\r')"
+          if [ -z "$effective" ]; then
+            echo "::error title=Auth publication::Aucun _authToken pour npm.pkg.github.com dans $cfg : la publication partirait NON authentifiee."
+            exit 1
+          fi
+          case "$effective" in
+            '${'*)
+              echo "::error title=Auth publication::L'_authToken est reste litteral ($effective) : la variable n'a pas ete resolue."
+              exit 1
+              ;;
+          esac
+          if [ -n "${READ_TOKEN:-}" ] && [ "$effective" = "$READ_TOKEN" ]; then
+            echo "::error title=Auth publication::Le jeton effectif est NPM_TOKEN, qui n'a que read:packages. La publication rendrait un 403 « does not match expected scopes ». La config utilisateur pnpm l'emporte sur NODE_AUTH_TOKEN : re-poser le jeton d'ECRITURE juste avant publish. Voir GRO-1114."
+            exit 1
+          fi
+          if [ "$effective" != "$WRITE_TOKEN" ]; then
+            echo "::error title=Auth publication::Le jeton effectif n'est pas le jeton d'ECRITURE attendu. Voir GRO-1114."
+            exit 1
+          fi
+
+          pkg="$(node -p "require('./package.json').name")"
+          probe="https://npm.pkg.github.com/${pkg/\//%2f}"
+          code="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $WRITE_TOKEN" "$probe")"
+          case "$code" in
+            401|403)
+              echo "::error title=Auth publication::Le registre a REFUSE le jeton d'ecriture (HTTP $code) sur $probe."
+              exit 1
+              ;;
+          esac
+          echo "Auth d'ecriture effective ; registre joignable (HTTP $code sur $pkg)."
+
       - name: Publish
         run: pnpm publish --no-git-checks --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

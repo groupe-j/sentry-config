@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "gh api repos/groupe-j/dev-conventions/contents/CLAUDE_SHARED.md --jq '.content' 2>/dev/null | base64 -d > CLAUDE_SHARED.md 2>/dev/null; gh api repos/groupe-j/dev-conventions/contents/ADMIN_PROCEDURES.md --jq '.content' 2>/dev/null | base64 -d > ADMIN_PROCEDURES.md 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  }
+}

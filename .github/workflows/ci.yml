@@ -1,51 +1,299 @@
 name: CI
 
+# ⚠️ paths-ignore + required status check = piège : un PR purement docs voit
+# le workflow skippé → le check `Lint & Typecheck` n'est jamais émis → si ce
+# check devient REQUIS (cf. ADR-0012 Phase 1), le PR docs reste bloqué « en
+# attente ». Tant que les required checks sont vides c'est OK. Quand on les
+# active, remplacer paths-ignore par un job-garde qui émet toujours le check
+# (pattern « always-green » via dorny/paths-filter), ou retirer paths-ignore.
+
 on:
-  pull_request:
-    branches: [main]
   push:
-    branches: [main]
+    branches: [main, staging]
+    # Un changement purement docs/assets ne doit pas brûler de minutes CI.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "decisions/**"
+      - "**.jpeg"
+      - "**.jpg"
+      - "**.png"
+      - "**.svg"
+      - "**.webp"
+      - "LICENSE"
+  pull_request:
+    # ⚠️ Déclarer `types:` REMPLACE le défaut (`opened`/`synchronize`/`reopened`) —
+    # il faut donc les réénumérer, sinon on casse tous les déclenchements normaux.
+    #
+    # `edited` couvre le retargetage de base (`gh pr edit --base staging`) : GitHub
+    # l'émet en action `edited`, hors du défaut, donc une PR retargetée passait
+    # sans AUCUNE CI (et sans le job `label` de dependabot-auto-merge).
+    # Contrepartie : `edited` se déclenche aussi sur une édition de titre/corps.
+    # Le `concurrency` ci-dessous (clé `github.ref` = refs/pull/N/merge, identique
+    # d'un événement à l'autre pour une même PR) annule le run précédent, donc une
+    # rafale d'éditions coûte un run, pas N.
+    types: [opened, synchronize, reopened, edited]
+    branches: [main, staging]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "decisions/**"
+      - "**.jpeg"
+      - "**.jpg"
+      - "**.png"
+      - "**.svg"
+      - "**.webp"
+      - "LICENSE"
+  workflow_dispatch:
+    inputs:
+      run_e2e:
+        description: "Lancer les tests E2E"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Turbo Remote Cache (Vercel-hosted, gratuit). Partagé CI ↔ local ↔ prod : un
+# package aux entrées inchangées est rejoué depuis le cache au lieu d'être
+# rebuild/re-testé (`>>> FULL TURBO`). Additif et sûr — token absent/invalide →
+# turbo warn + build normal (jamais d'échec). Poser les 2 valeurs au niveau org :
+#   gh secret set TURBO_TOKEN --org <org> --visibility all   (jeton Vercel)
+#   gh variable set TURBO_TEAM --org <org> -b <slug-team> --visibility all
+env:
+  TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+  TURBO_TEAM: ${{ vars.TURBO_TEAM }}
 
 jobs:
   ci:
+    # Ce job gate lint + typecheck + BUILD. Le nom du check reste « Lint &
+    # Typecheck » volontairement : c'est le nom référencé par les required
+    # status checks des repos ; le renommer casserait silencieusement leur
+    # gating. Le step Build est ajouté DANS ce job (pas un job séparé) pour
+    # réutiliser l'install + le `db:generate` déjà faits — coût maîtrisé.
+    name: Lint & Typecheck
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
-        # `packageManager` fait foi : pas de `version:` ici (action-setup@v6).
+      # pnpm/action-setup v6 EXIGE une version explicite et échoue sinon
+      # (« Please specify it by one of the following ways »). Aucune `version:`
+      # n'est posée ici : on délègue au champ `packageManager` du package.json
+      # de l'app — c'est la source unique, et elle vaut aussi en local.
+      # ⚠️ Une app SANS `packageManager` doit ajouter `version:` sous `with:`.
       - uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          # Match the Vercel production runtime (Node 24.x) — avoid CI/prod skew.
+          node-version: 24
           cache: pnpm
-          # Writes a user-level .npmrc with the @groupe-j auth token. Required
-          # because pnpm ignores _authToken lines in the committed project
-          # .npmrc (security), so GitHub Packages deps like
-          # @groupe-j/eslint-config 401 without this. Mirrors publish.yml.
-          registry-url: "https://npm.pkg.github.com"
-          scope: "@groupe-j"
 
       - name: Auth GitHub Packages
         # pnpm >= 10.34.5 n'expanse plus les variables d'environnement dans les
-        # identifiants de registre lus depuis un .npmrc de PROJET. Seule la
-        # config utilisateur est encore expansee. Voir GRO-1093.
+        # identifiants de registre lus depuis un .npmrc de PROJET (durcissement
+        # de securite : ce fichier est commite). Seule la config utilisateur est
+        # encore expansee — d'ou ce `pnpm config set`, qui ecrit dans ~/.npmrc
+        # du runner. Voir GRO-1093.
         run: pnpm config set "//npm.pkg.github.com/:_authToken" "${{ secrets.NPM_TOKEN }}"
 
-      - name: Install
-        run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile
+        env:
+          # GitHub Packages auth for @groupe-j/* — le token est desormais posé
+          # directement dans ~/.npmrc du runner par l'étape "Auth GitHub
+          # Packages" ci-dessus (pnpm >= 10.34.5 n'expanse plus ${NPM_TOKEN}
+          # depuis un .npmrc de PROJET, cf. GRO-1093). Ce step `pnpm install`
+          # ne DÉPEND donc plus de ces 2 vars pour son auth registre. On les
+          # garde quand même posées ici pour tout script/outil non-pnpm du
+          # job (postinstall, CLI npm direct, etc.) qui lirait l'une ou
+          # l'autre directement depuis process.env — aucun n'a été identifié
+          # dans le gabarit lui-même, mais retirer sans certitude portfolio-
+          # wide serait un pari, pas une vérification.
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Generate (Prisma, etc.)
+        run: |
+          if jq -e '.scripts["db:generate"]' package.json >/dev/null 2>&1; then
+            pnpm db:generate
+          else
+            echo "⏭️ Pas de script db:generate, skip"
+          fi
+
+      - name: Lint
+        run: |
+          if jq -e '.scripts.lint' package.json >/dev/null 2>&1; then
+            pnpm lint
+          else
+            echo "⏭️ Pas de script lint, skip"
+          fi
+
+      - name: Typecheck
+        run: |
+          if jq -e '.scripts.typecheck' package.json >/dev/null 2>&1; then
+            pnpm typecheck
+          elif jq -e '.scripts["type-check"]' package.json >/dev/null 2>&1; then
+            pnpm type-check
+          else
+            echo "⏭️ Pas de script typecheck, skip"
+          fi
+
+      # Gate `build` en CI. Lint + typecheck ne détectent PAS les casses de build
+      # réelles (ex. option `tsc` invalide → TS5101 à l'émission des .d.ts d'un
+      # package publié, conf PostCSS cassée que `next build` seul voit) : angle
+      # mort qui a laissé filer des régressions jusqu'en prod. On builde donc
+      # systématiquement dès qu'un script `build` existe.
+      #
+      # Coût maîtrisé, par ordre d'effet :
+      #   1. Un PR purement docs/assets ne déclenche même pas ce workflow
+      #      (cf. paths-ignore en tête) → zéro build inutile.
+      #   2. Turbo Remote Cache (env TURBO_* global ci-dessus) rejoue
+      #      `>>> FULL TURBO` les packages aux entrées inchangées.
+      #   3. Monorepo turbo : câbler `turbo build --affected` dans le script
+      #      `build` du repo pour ne builder que les packages touchés (nécessite
+      #      un fetch de la base : `actions/checkout` avec `fetch-depth: 0` +
+      #      `TURBO_SCM_BASE`). Optionnel, à activer par repo.
+      - name: Build
+        env:
+          # OOM : les runners GitHub hébergés ont ~7 Go ; le heap V8 par défaut
+          # (~2 Go sur les gros monorepos) fait sauter `next build` en SIGABRT
+          # non déterministe. On relève la limite sous le plafond du runner.
+          NODE_OPTIONS: --max-old-space-size=4096
+          # `next build` exige des env vars runtime que la CI n'a pas (DB, secrets
+          # d'app). SKIP_ENV_VALIDATION court-circuite la validation Zod de
+          # @groupe-j/env pour builder à sec.
+          # ⚠️ GOTCHA turbo 2.x — env strict par défaut : une var posée ICI
+          # N'ATTEINT PAS la tâche `build`. Chaque repo qui build via turbo DOIT
+          # déclarer les vars pass-through dans SON turbo.json (exemple) :
+          #   "tasks": { "build": { "passThroughEnv":
+          #     ["SKIP_ENV_VALIDATION", "SENTRY_AUTH_TOKEN", "NPM_TOKEN",
+          #      "NODE_AUTH_TOKEN", "NEXT_PUBLIC_*"] } }
+          # Sinon SKIP_ENV_VALIDATION est invisible → le build échoue sur la
+          # validation env alors que la var est bien posée ici.
+          # Repo qui upload des sourcemaps Sentry au build : ajouter en plus ici
+          #   SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          # (non posé par défaut — la plupart des repos n'en ont pas besoin).
+          SKIP_ENV_VALIDATION: "true"
+          # Certains builds résolvent/compilent des @groupe-j/* → auth GitHub
+          # Packages requise aussi au build (mêmes 2 noms de var que l'install).
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if jq -e '.scripts.build' package.json >/dev/null 2>&1; then
+            pnpm build
+          else
+            echo "⏭️ Pas de script build, skip"
+          fi
+
+  # ---------------------------------------------------------------------------
+  # ⛔ NE JAMAIS RENDRE « Tests E2E » REQUIS TEL QUEL — lire ceci d'abord.
+  #
+  # Ce job est conditionné (`run_e2e == 'true'`), donc sur une PR normale il est
+  # SKIPPÉ. Or **GitHub traite un check-run `skipped` comme SATISFAISANT une
+  # exigence de branche.** Ajouter « Tests E2E » aux required checks d'une
+  # branche ne protégerait donc rien : le contexte serait publié `skipped` sur
+  # chaque PR, et chaque PR se fusionnerait sans qu'aucun E2E n'ait tourné — en
+  # « tout vert ».
+  #
+  # Ce n'est pas théorique. Trois mesures dans le portefeuille :
+  #
+  #   • groupe-j/JELEMENT — « Tests E2E » REQUIS sur `main`, job conditionné
+  #     `github.actor != 'dependabot[bot]'`. PR #192 (bump sharp 0.34.5 → 0.35.0)
+  #     fusionnée par app/github-actions **9 secondes** après que son unique
+  #     « Tests E2E » ait conclu `skipped`. Aucun bypass administrateur. Et
+  #     sharp 0.35 casse en silence les couvertures du blog : sur 57 articles de
+  #     j-element.fr/blog, un seul est sans image — celui publié le lendemain.
+  #
+  #   • groupe-j/ridesamui-t3 — PR #655 (promotion staging → main) fusionnée
+  #     alors que le seul « E2E Gate » conclu sur sa tête était le `skipped` du
+  #     run de push ; le gate réel n'a démarré que 9 minutes APRÈS le merge.
+  #
+  #   • groupe-j/archicollab-t3 — la tête `2b6f0008` porte les DEUX verdicts
+  #     opposés sur le même SHA (11:35:27 `skipped`, 11:56:20 `failure`) : la
+  #     tête d'une PR de synchro est aussi le tip d'une branche poussée, donc un
+  #     commit collecte un verdict réel ET un `skipped` sans contenu.
+  #
+  # ── SI VOUS VOULEZ RENDRE L'E2E OBLIGATOIRE ────────────────────────────────
+  # Ne posez pas le contexte requis sur CE job. Séparez « faire » et « juger » :
+  #
+  #   1. renommer ce job « Tests E2E (run) » — il ne porte plus le contexte ;
+  #   2. ajouter un job d'agrégation qui PORTE le nom requis, `needs: [e2e]`,
+  #      `if: always()`, et qui traduit `needs.e2e.result` en code de sortie —
+  #      un `skipped` DOIT y devenir `exit 1`.
+  #
+  # Un job de gate qui tourne toujours ne peut conclure que `success` ou
+  # `failure` : l'état « ni testé ni bloquant » disparaît. C'est la forme
+  # appliquée sur groupe-j/JELEMENT (PR #224).
+  #
+  # Si le job de travail ne PEUT pas tourner sur certains événements (matrice
+  # e2e trop chère sur les pushes, par exemple), faites du `name:` du gate une
+  # EXPRESSION, pour que les runs sans verdict publient un nom DIFFÉRENT : le
+  # contexte requis est alors ABSENT de ce SHA, et absent **bloque**
+  # (`GH006 … Required status check "…" is expected`) là où `skipped` autorise.
+  # Forme appliquée sur ridesamui-t3 (PR #704) et archicollab-t3 (PR #755).
+  #
+  #   ⚠️ Deux pièges mesurés sur cette variante :
+  #     – GitHub N'ÉVALUE PAS `jobs.<id>.name` pour un job SKIPPÉ : il publie le
+  #       gabarit BRUT (un check littéralement nommé `(github.event_name == …`).
+  #       Le job de gate doit donc TOUJOURS tourner et sortir en 0 tout de suite
+  #       quand il ne fait pas autorité.
+  #     – Retirer le contexte d'un chemin où il est ATTENDU fige la branche.
+  #       Si un workflow fast-forward `staging` sur `main` par un push, le
+  #       contexte doit rester publié sur les pushes vers `main`, sinon GH006
+  #       bloque la synchro pour toujours. Testez LES DEUX chemins.
+  #
+  # ⛔ Et n'« émettez » jamais le contexte depuis un job qui ne mesure rien
+  # (pattern « always-green »/`dorny/paths-filter`, ou un job qui se contente
+  # d'`echo` la liste des checks attendus — il en existe un dans le portefeuille,
+  # `LeDossierParfait/merge-to-main.yml`, job « Required Status Checks », qui
+  # n'exécute aucune vérification). Un garde-fou qui passe sans mesurer est pire
+  # que pas de garde-fou : il rend la protection de branche décorative.
+  e2e:
+    name: Tests E2E
+    if: github.event.inputs.run_e2e == 'true'
+    runs-on: ubuntu-latest
+    # Forcer l'environnement Sentry à `ci` pour tout le job e2e : sinon les
+    # erreurs émises par l'app sous test (serveur Node sur le runner) arrivent
+    # taggées `production` (VERCEL_ENV absent → fallback prod) et polluent le
+    # triage prod (faux tickets, cf. GRO-256). Pour que cette variable soit
+    # prise en compte, la config Sentry de l'app doit lire `SENTRY_ENVIRONMENT`
+    # AVANT VERCEL_ENV/NODE_ENV (cf. snippets standard dans CLAUDE_SHARED.md) —
+    # un `environment` explicite dans Sentry.init override sinon cette env var.
+    env:
+      SENTRY_ENVIRONMENT: ci
+      NEXT_PUBLIC_SENTRY_ENVIRONMENT: ci
+    steps:
+      - uses: actions/checkout@v7
+
+      # pnpm/action-setup v6 EXIGE une version explicite et échoue sinon
+      # (« Please specify it by one of the following ways »). Aucune `version:`
+      # n'est posée ici : on délègue au champ `packageManager` du package.json
+      # de l'app — c'est la source unique, et elle vaut aussi en local.
+      # ⚠️ Une app SANS `packageManager` doit ajouter `version:` sous `with:`.
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          # Match the Vercel production runtime (Node 24.x) — avoid CI/prod skew.
+          node-version: 24
+          cache: pnpm
+
+      - name: Auth GitHub Packages
+        # pnpm >= 10.34.5 n'expanse plus les variables d'environnement dans les
+        # identifiants de registre lus depuis un .npmrc de PROJET (durcissement
+        # de securite : ce fichier est commite). Seule la config utilisateur est
+        # encore expansee — d'ou ce `pnpm config set`, qui ecrit dans ~/.npmrc
+        # du runner. Voir GRO-1093.
+        run: pnpm config set "//npm.pkg.github.com/:_authToken" "${{ secrets.NPM_TOKEN }}"
+
+      - run: pnpm install --frozen-lockfile
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Lint
-        run: pnpm lint
+      - name: Install Playwright
+        run: pnpm exec playwright install --with-deps chromium
 
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: Test
-        run: pnpm test
-
-      - name: Build
-        run: pnpm build
+      - name: Run E2E
+        run: pnpm test:e2e

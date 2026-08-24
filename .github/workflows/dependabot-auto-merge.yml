@@ -396,6 +396,28 @@ jobs:
       statuses: read
       actions: read
     steps:
+      # ── Jeton d'application, OPTIONNEL ─────────────────────────────────────
+      # 🚨 Dependabot n'obeit pas a `github-actions[bot]` : une commande postee
+      # avec `secrets.GITHUB_TOKEN` recoit « Sorry, only users with push access
+      # can use that command. » (mesure le 2026-08-09 sur megahote, 3 PRs sur 3).
+      # Le degel des PRs en conflit exige donc une AUTRE identite.
+      #
+      # L'etape est conditionnee a la presence des secrets : sans eux, le job
+      # tourne normalement et se contente d'ANNONCER les PRs gelees. Aucun depot
+      # ne casse parce que l'application n'y est pas installee.
+      #
+      # ⚠️ Que Dependabot honore l'identite d'une APPLICATION (qui n'est pas un
+      # « user ») n'est PAS garanti par sa documentation. La detection de refus
+      # plus bas tranche la question a la premiere execution reelle, et emet un
+      # ::warning:: au lieu de compter une reussite imaginaire.
+      - name: Jeton d'application pour les commandes Dependabot
+        id: apptoken
+        if: ${{ vars.DEPENDABOT_CMD_APP_ID != '' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          app-id: ${{ vars.DEPENDABOT_CMD_APP_ID }}
+          private-key: ${{ secrets.DEPENDABOT_CMD_APP_PRIVATE_KEY }}
+
       - name: Label + merge les PRs que le declencheur pull_request n'a jamais vues
         run: |
           set -euo pipefail
@@ -423,6 +445,7 @@ jobs:
           count=$(wc -l < "$RUNNER_TEMP/dependabot-prs.jsonl")
           echo "PRs Dependabot ouvertes : $count"
           merged=0
+          recreated=0
 
           # Lecture sur le descripteur 3, pas sur stdin : les `gh` appeles dans
           # la boucle heriteraient sinon du fichier comme entree standard et
@@ -432,6 +455,130 @@ jobs:
             oid=$(echo "$pr" | jq -r '.headRefOid')
             state=$(echo "$pr" | jq -r '.mergeStateStatus')
             labeled=$(echo "$pr" | jq -r --arg L "$LABEL" 'any(.labels[]?; .name == $L)')
+
+            # ── PRs en CONFLIT : les degeler (GRO-871) ──────────────────────
+            # Une PR en conflit n'a pas de `refs/pull/N/merge` calculable, donc
+            # GitHub n'y cree AUCUN run `pull_request`. Le job `merge` etant
+            # declenche par `workflow_run` de la CI, il ne peut alors JAMAIS
+            # s'executer, et ce job-ci ne rattrape rien non plus puisqu'il exige
+            # des checks verts qui n'existeront jamais. La PR est gelee
+            # DEFINITIVEMENT — sans le moindre rouge pour le signaler : elle n'a
+            # pas d'echec, elle n'a RIEN.
+            #
+            # Le declencheur est mecanique et se reproduit a chaque cycle : des
+            # qu'une PR Dependabot fusionne, elle deplace le lockfile et met en
+            # conflit toutes ses soeurs. Releve le 2026-08-08 : 29 PRs figees sur
+            # 10 depots, dont 9 sur linegroup immobiles depuis le 25 juillet, et
+            # 14 paires de doublons nees de Dependabot republiant a cote des
+            # gelees. Debloquees a la main ce jour-la ; ce bloc existe pour qu'il
+            # n'y ait pas de prochaine fois.
+            #
+            # `@dependabot recreate` est la sortie : Dependabot ferme la PR
+            # LUI-MEME et en republie une propre, sur une base a jour.
+            # ⚠️ NE JAMAIS fermer la PR a la main ici a la place : une fermeture
+            # manuelle enregistre un ignore IRREVERSIBLE de cette version
+            # (`reopen` ne le defait pas), et les deux PRs d'une paire visant la
+            # MEME version, fermer l'une peut condamner l'autre.
+            # 🚨 `gh pr list --json mergeStateStatus` rend tres souvent UNKNOWN :
+            # GitHub calcule la fusionnabilite PARESSEUSEMENT, a la requete
+            # INDIVIDUELLE. Tester `= "DIRTY"` sur un instantane de LISTE rate
+            # donc sa cible la plupart du temps — et reussit parfois, quand
+            # GitHub avait deja calcule. Un instrument qui marche une fois sur
+            # deux installe la confiance sans la mériter. Mesure le 2026-08-09
+            # sur megahote : 3 PRs `CONFLICTING` cotees `UNKNOWN` dans la liste.
+            # (C'est aussi ce qui a rendu faux un releve « 23 conflits → 0 ».)
+            if [ "$state" = "UNKNOWN" ]; then
+              state=$(gh pr view "$number" --repo "$REPO" --json mergeStateStatus \
+                --jq '.mergeStateStatus')
+              echo "PR #$number : etat recalcule individuellement → '$state'."
+            fi
+
+            if [ "$state" = "DIRTY" ]; then
+              # ── Re-lecture AVANT d'agir (meme garde que le chemin de merge) ──
+              # `$state` et `$oid` viennent de l'instantane `gh pr list` pris en
+              # debut de job. Dependabot a pu rebaser la PR depuis, ou surtout un
+              # mainteneur a pu resoudre le conflit A LA MAIN : `recreate`
+              # DETRUIRAIT ce travail, puisque Dependabot republie sa branche.
+              # C'est le scenario couteux — pas le recreate inutile.
+              # On re-lit donc juste avant de poster, et on ne poursuit que si
+              # l'etat ET le head sont inchanges. La passe du lendemain verra
+              # l'etat frais.
+              now=$(gh pr view "$number" --repo "$REPO" --json mergeStateStatus,headRefOid)
+              if [ "$(echo "$now" | jq -r '.mergeStateStatus')" != "DIRTY" ] \
+                 || [ "$(echo "$now" | jq -r '.headRefOid')" != "$oid" ]; then
+                echo "PR #$number : etat ou head modifie depuis l'instantane — pas de recreate."
+                continue
+              fi
+              # Idempotence ancree au SHA : une seule demande par head. Sans
+              # cela la passe quotidienne reposterait indefiniment si Dependabot
+              # echoue a recreer, et noierait la PR sous ses propres commentaires.
+              marker="<!-- gjdc-recreate:$oid -->"
+              if gh pr view "$number" --repo "$REPO" --json comments \
+                   --jq '[.comments[].body] | join("\n")' | grep -qF "$marker"; then
+                echo "PR #$number : en conflit, recreate deja demande pour $oid — skip."
+                continue
+              fi
+
+              # Sans jeton d'application, inutile de poster : `github-actions[bot]`
+              # se fera refuser (voir plus bas). On ANNONCE la PR gelee et on
+              # passe — sans marqueur, pour qu'une passe ulterieure reessaie des
+              # que l'application est installee.
+              if [ -z "${CMD_TOKEN:-}" ]; then
+                echo "::warning title=PR Dependabot gelee::PR #$number est en conflit et ne peut pas etre relancee : aucun jeton d'application configure (vars.DEPENDABOT_CMD_APP_ID + secrets.DEPENDABOT_CMD_APP_PRIVATE_KEY). Commenter '@dependabot recreate' a la main en attendant."
+                continue
+              fi
+
+              # Passage par l'API REST et non `gh pr comment` : ce dernier n'a
+              # pas de `--json`, or il faut l'ID du commentaire pour pouvoir le
+              # retirer si Dependabot refuse la commande (voir juste apres).
+              # `jq -Rs` lit l'entree brute et en fait la chaine `body`.
+              # `GH_TOKEN` est surcharge POUR CET APPEL : le commentaire doit
+              # venir de l'application, pas de `github-actions[bot]`.
+              cid=$(printf '@dependabot recreate\n\n%s\n' "$marker" \
+                | jq -Rs '{body: .}' \
+                | GH_TOKEN="$CMD_TOKEN" \
+                  gh api "repos/${REPO}/issues/${number}/comments" --input - --jq '.id')
+
+              # ── VERIFIER que Dependabot a ACCEPTE la commande ───────────────
+              # 🚨 Dependabot n'obeit qu'a un UTILISATEUR ayant un acces en
+              # ecriture. Un commentaire poste avec `secrets.GITHUB_TOKEN` vient
+              # de `github-actions[bot]` et se fait repondre :
+              #     « Sorry, only users with push access can use that command. »
+              # Mesure le 2026-08-09 sur groupe-j/megahote — 3 PRs sur 3.
+              #
+              # Sans ce controle, ce job posterait dans le vide, compterait
+              # « 3 relancees », laisserait un marqueur qui INTERDIT toute
+              # nouvelle tentative, et sortirait VERT. C'est exactement le
+              # mensonge vert que ce fichier est cense eviter ailleurs.
+              #
+              # En cas de refus : on SUPPRIME notre commentaire (donc le
+              # marqueur, pour qu'une passe ulterieure avec un jeton valable
+              # reessaie), on n'incremente rien, et on emet un ::warning:: qui
+              # NOMME la PR gelee. Une PR gelee visible vaut mieux qu'un
+              # compteur menteur.
+              # La lecture est SEPAREE du test : en pipant `gh api` dans `grep`,
+              # le code de retour du pipeline serait celui de `grep`, et un
+              # echec de `gh api` (auth, quota, reseau) se lirait « pas de
+              # refus » — donc « commande acceptee ». Fail-open. Ici un echec de
+              # `gh api` propage par `set -e`, et `grep -q` est consomme par le
+              # `if`, dont l'unique mode d'echec est « aucune correspondance ».
+              sleep 10
+              reponse=$(gh api "repos/${REPO}/issues/${number}/comments" \
+                --jq '[.[] | select(.user.login == "dependabot[bot]")] | last | .body // ""')
+
+              if printf '%s' "$reponse" | grep -q "only users with push access"; then
+                # Suppression avec le MEME jeton que la creation : c'est
+                # l'application qui a poste, et rien ne garantit que le jeton du
+                # job puisse effacer le commentaire d'une autre identite.
+                GH_TOKEN="$CMD_TOKEN" \
+                  gh api -X DELETE "repos/${REPO}/issues/comments/${cid}" >/dev/null
+                echo "::warning title=PR Dependabot gelee::PR #$number est en conflit et Dependabot a REFUSE la commande postee par l'application. Son identite n'est donc pas reconnue comme « user with push access » — commenter '@dependabot recreate' a la main, ou passer a un PAT utilisateur."
+              else
+                echo "PR #$number : en conflit → '@dependabot recreate' accepte."
+                recreated=$((recreated + 1))
+              fi
+              continue
+            fi
 
             # ── Autorisation SPÉCIFIQUE AU SHA (même principe que le job 2) ──
             # Le job `merge` ne se fie JAMAIS au label seul : avant de merger il
@@ -532,8 +679,11 @@ jobs:
             merged=$((merged + 1))
           done 3< "$RUNNER_TEMP/dependabot-prs.jsonl"
 
-          echo "Rattrapage termine : $merged PR(s) mergee(s) sur $count examinee(s)."
+          echo "Rattrapage termine : $merged PR(s) mergee(s), $recreated en conflit relancee(s), sur $count examinee(s)."
         env:
           REPO: ${{ github.repository }}
           LABEL: dependabot-auto-merge-ok
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Vide tant que l'application n'est pas configuree sur le depot. Le
+          # script le teste et se contente alors d'annoncer les PRs gelees.
+          CMD_TOKEN: ${{ steps.apptoken.outputs.token }}

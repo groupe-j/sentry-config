@@ -1,0 +1,23 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": [
+    "src/index.ts",
+    "src/client.ts",
+    "src/client-lazy.ts",
+    "src/server.ts",
+    "src/edge.ts",
+    "src/armed.ts"
+  ],
+  "plugin": [
+    "typedoc-plugin-markdown"
+  ],
+  "out": "api-reference",
+  "outputFileStrategy": "modules",
+  "readme": "none",
+  "gitRevision": "main",
+  "hideBreadcrumbs": true,
+  "hidePageHeader": true,
+  "excludePrivate": true,
+  "excludeInternal": true,
+  "excludeExternals": true
+}

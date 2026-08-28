@@ -1,0 +1,4 @@
+# Référence d'API générée par TypeDoc (`pnpm docs:api`) — committée pour être
+# lisible sans build. Marquée `linguist-generated` : GitHub replie le diff dans
+# les PR et l'exclut des statistiques de langage.
+api-reference/** linguist-generated=true

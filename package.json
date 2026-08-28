@@ -50,7 +50,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
-    "prepublishOnly": "pnpm build && pnpm typecheck"
+    "prepublishOnly": "pnpm build && pnpm typecheck",
+    "docs:api": "typedoc"
   },
   "peerDependencies": {
     "@sentry/nextjs": ">=10.63.0 <11",
@@ -69,6 +70,8 @@
     "eslint": "^9.20.0",
     "next": "^16.2.11",
     "tsup": "^8.0.0",
+    "typedoc": "0.28.20",
+    "typedoc-plugin-markdown": "4.13.0",
     "typescript": "^5.7.0",
     "vitest": "^4.1.9"
   },

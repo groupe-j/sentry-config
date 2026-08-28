@@ -50,3 +50,13 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+      # La surface `api-tsdoc` se derive de la PRESENCE du script `docs:api`,
+      # jamais de la fraicheur de sa sortie : une reference generee il y a six
+      # mois, ou un script casse, passent l'une et l'autre pour vertes. Cette
+      # etape regenere et exige un diff vide -- c'est elle qui fait de la
+      # reference committee une mesure, et non une decoration.
+      - name: Reference d'API a jour
+        run: |
+          pnpm docs:api
+          git diff --exit-code -- api-reference

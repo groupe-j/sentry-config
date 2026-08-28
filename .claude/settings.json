@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "gjdc_sync() {\n  d=\"$1\"; raw=\".$1.gjdc-raw.$$\"; tmp=\".$1.gjdc-tmp.$$\";\n  if gh api \"repos/groupe-j/dev-conventions/contents/$d\" --jq '.content' > \"$raw\" 2>/dev/null && [ -s \"$raw\" ] && base64 -d < \"$raw\" > \"$tmp\" 2>/dev/null && [ -s \"$tmp\" ]; then\n    rm -f \"$raw\"; mv -f \"$tmp\" \"$d\"; return 0;\n  fi;\n  rm -f \"$raw\" \"$tmp\";\n  echo \"gjdc: echec de synchro de $d — le fichier existant est CONSERVE (ni vide, ni tronque). Verifier gh auth status et le reseau ; les conventions locales peuvent etre PERIMEES.\" >&2;\n  return 1;\n};\ngjdc_rc=0;\ngjdc_sync CLAUDE_SHARED.md || gjdc_rc=1;\ngjdc_sync ADMIN_PROCEDURES.md || gjdc_rc=1;\nexit $gjdc_rc"
+            "command": "gjdc_sync() {\n  d=\"$1\"; raw=\".$1.gjdc-raw.$$\"; tmp=\".$1.gjdc-tmp.$$\";\n  if gh api \"repos/groupe-j/dev-conventions/contents/$d\" --jq '.content' > \"$raw\" 2>/dev/null && [ -s \"$raw\" ] && base64 -d < \"$raw\" > \"$tmp\" 2>/dev/null && [ -s \"$tmp\" ]; then\n    rm -f \"$raw\"; mv -f \"$tmp\" \"$d\"; return 0;\n  fi;\n  rm -f \"$raw\" \"$tmp\";\n  echo \"gjdc: echec de synchro de $d — le fichier existant est CONSERVE (ni vide, ni tronque). Verifier gh auth status et le reseau ; les conventions locales peuvent etre PERIMEES.\" >&2;\n  return 1;\n};\ngjdc_rc=0;\ngjdc_sync CLAUDE_SHARED.md || gjdc_rc=1;\nexit $gjdc_rc"
           }
         ]
       }

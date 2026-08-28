@@ -71,6 +71,7 @@ jobs:
       github.event_name == 'pull_request' &&
       github.actor == 'dependabot[bot]'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
       pull-requests: write
@@ -169,11 +170,28 @@ jobs:
     # `pull_request` (c'est le cas de notre ci.yml : `push` n'y écoute que
     # main/staging, pas les branches dependabot/*). Si un repo renomme « CI » ou
     # bascule sa CI de PR en `push`-only, ce merge ne se déclenchera jamais.
+    #
+    # MESURE (aout 2026) : sans le filtre de branche ci-dessous, ce job s'executait
+    # sur la CI verte de TOUTE PR — archicollab 39 executions dont 0 pour Dependabot,
+    # crm 63 dont 4. Chacune dure ~5 SECONDES et ne trouve rien a fusionner, mais
+    # GitHub facture au job ARRONDI A LA MINUTE : ~3 570 minutes par mois a l'echelle
+    # du portefeuille, dont 95 % pour rien.
+    #
+    # Le filtre porte sur le PREFIXE DE BRANCHE et non sur l'acteur, deliberement :
+    # `dependabot[bot]` et `app/dependabot` designent la meme entite selon l'API
+    # interrogee, et cette ambiguite a deja rendu une automatisation inerte EN VERT
+    # sur 11 depots. `dependabot/*` est le prefixe que Dependabot impose a toutes ses
+    # branches, quel que soit l'ecosysteme.
+    #
+    # Un cas rate ici n'est pas perdu : le job `catch-up` quotidien rattrape toute PR
+    # Dependabot mergeable qui n'aurait pas ete prise au vol.
     if: >-
       github.event_name == 'workflow_run' &&
       github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.conclusion == 'success'
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.head_branch, 'dependabot/')
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: write
       pull-requests: write
@@ -375,6 +393,13 @@ jobs:
     name: Catch-up on pre-existing Dependabot PRs
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    # 🚨 L'attente d'une reponse de Dependabot est passee de 10 s a 60 s PAR PR
+    # en conflit (6 x 10 s). Sur un stock de PR gelees, le pire cas se compte
+    # desormais en dizaines de minutes, et le defaut GitHub est de 360 min : un
+    # job qui traine mange des minutes facturees sans que personne ne le voie.
+    # Le plafond rend la borne EXPLICITE — depasse, le job rougit, ce qui est
+    # exactement le signal voulu.
+    timeout-minutes: 30
     permissions:
       contents: write
       pull-requests: write
@@ -410,9 +435,46 @@ jobs:
       # « user ») n'est PAS garanti par sa documentation. La detection de refus
       # plus bas tranche la question a la premiere execution reelle, et emet un
       # ::warning:: au lieu de compter une reussite imaginaire.
+      #
+      # ⚠️ La condition teste les DEUX entrees, et l'etape est explicitement
+      # non bloquante. Sans cela, la promesse ci-dessus etait fausse dans deux
+      # cas reels : une variable `DEPENDABOT_CMD_APP_ID` posee sans son secret
+      # jumeau, et une application non installee SUR CE DEPOT — dans les deux
+      # cas `create-github-app-token` echoue, et son echec tuait le job entier
+      # AVANT le repli en simple avertissement qu'annonce ce commentaire.
+      # `continue-on-error` laisse `steps.apptoken.outputs.token` vide, ce que
+      # le consommateur (`CMD_TOKEN`) traite deja comme « pas de jeton ».
+      # `if:` n'a PAS acces au contexte `secrets` (seuls env/inputs/job/matrix/
+      # needs/runner/steps/strategy/vars le sont). Un `if:` qui le lit reste du
+      # YAML parfaitement BIEN FORME — un parseur YAML l'avale sans broncher —
+      # mais il est invalide au regard du SCHEMA DE WORKFLOW de GitHub, et
+      # c'est GitHub qui tranche. Il rejette alors le fichier sans la moindre
+      # erreur visible : il l'ignore, et son `name` enregistre retombe sur son
+      # `path` (`gh api .../actions/workflows` le confirme). Le workflow
+      # entier — y compris les jobs `label` et `merge`, qui n'ont rien a voir
+      # avec ce token — devient INERTE. Se fier a « le YAML se parse » pour
+      # conclure « GitHub l'accepte » est donc une mesure a cote de la
+      # question : le seul oracle est `name` != `path` sur l'API. Le secret ne
+      # peut etre lu que dans
+      # `env:`, jamais dans `if:` : on le teste donc dans une etape a part,
+      # dont la SORTIE (contexte `steps.*.outputs`, autorise en `if:`) sert de
+      # garde a l'etape suivante.
+      - name: Verifie si le jeton d'application Dependabot est configure
+        id: apptoken_check
+        run: |
+          if [ -n "$APP_ID" ] && [ -n "$APP_PRIVATE_KEY" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          APP_ID: ${{ vars.DEPENDABOT_CMD_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.DEPENDABOT_CMD_APP_PRIVATE_KEY }}
+
       - name: Jeton d'application pour les commandes Dependabot
         id: apptoken
-        if: ${{ vars.DEPENDABOT_CMD_APP_ID != '' }}
+        if: steps.apptoken_check.outputs.configured == 'true'
+        continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
           app-id: ${{ vars.DEPENDABOT_CMD_APP_ID }}
@@ -534,10 +596,14 @@ jobs:
               # `jq -Rs` lit l'entree brute et en fait la chaine `body`.
               # `GH_TOKEN` est surcharge POUR CET APPEL : le commentaire doit
               # venir de l'application, pas de `github-actions[bot]`.
-              cid=$(printf '@dependabot recreate\n\n%s\n' "$marker" \
+              # On retient aussi `created_at` : c'est lui qui permet plus bas de
+              # ne considerer QUE les reponses posterieures a notre commande.
+              poste=$(printf '@dependabot recreate\n\n%s\n' "$marker" \
                 | jq -Rs '{body: .}' \
                 | GH_TOKEN="$CMD_TOKEN" \
-                  gh api "repos/${REPO}/issues/${number}/comments" --input - --jq '.id')
+                  gh api "repos/${REPO}/issues/${number}/comments" --input -)
+              cid=$(printf '%s' "$poste" | jq -r '.id')
+              poste_le=$(printf '%s' "$poste" | jq -r '.created_at')
 
               # ── VERIFIER que Dependabot a ACCEPTE la commande ───────────────
               # 🚨 Dependabot n'obeit qu'a un UTILISATEUR ayant un acces en
@@ -562,21 +628,73 @@ jobs:
               # refus » — donc « commande acceptee ». Fail-open. Ici un echec de
               # `gh api` propage par `set -e`, et `grep -q` est consomme par le
               # `if`, dont l'unique mode d'echec est « aucune correspondance ».
-              sleep 10
-              reponse=$(gh api "repos/${REPO}/issues/${number}/comments" \
-                --jq '[.[] | select(.user.login == "dependabot[bot]")] | last | .body // ""')
+              #
+              # ── Trois issues, pas deux ─────────────────────────────────────
+              # L'ABSENCE de reponse n'est PAS une acceptation. Deux causes
+              # produisaient ce faux positif : lecture non paginee (au-dela
+              # d'une page, `last` renvoyait un commentaire ANCIEN, jamais le
+              # refus qui venait d'etre poste) et delai fixe (Dependabot depasse
+              # regulierement dix secondes). Dans les deux cas le `else`
+              # comptait « accepte », CONSERVAIT le marqueur ancre au SHA, et
+              # toute passe ulterieure sortait par le `skip` — le gel a vie que
+              # ce bloc existe pour defaire.
+              verdict="indetermine"
+              for _ in 1 2 3 4 5 6; do
+                sleep 10
+                brut=$(gh api --paginate --slurp \
+                  "repos/${REPO}/issues/${number}/comments?per_page=100")
+                reponse=$(printf '%s' "$brut" | jq -r --arg depuis "$poste_le" \
+                  '[.[][] | select(.user.login == "dependabot[bot]")
+                          | select(.created_at > $depuis)] | last | .body // ""')
+                if [ -n "$reponse" ]; then
+                  if printf '%s' "$reponse" | grep -q "only users with push access"; then
+                    verdict="refuse"
+                  else
+                    verdict="accepte"
+                  fi
+                  break
+                fi
+              done
 
-              if printf '%s' "$reponse" | grep -q "only users with push access"; then
-                # Suppression avec le MEME jeton que la creation : c'est
-                # l'application qui a poste, et rien ne garantit que le jeton du
-                # job puisse effacer le commentaire d'une autre identite.
-                GH_TOKEN="$CMD_TOKEN" \
-                  gh api -X DELETE "repos/${REPO}/issues/comments/${cid}" >/dev/null
-                echo "::warning title=PR Dependabot gelee::PR #$number est en conflit et Dependabot a REFUSE la commande postee par l'application. Son identite n'est donc pas reconnue comme « user with push access » — commenter '@dependabot recreate' a la main, ou passer a un PAT utilisateur."
-              else
-                echo "PR #$number : en conflit → '@dependabot recreate' accepte."
-                recreated=$((recreated + 1))
-              fi
+              case "$verdict" in
+                refuse)
+                  # Suppression avec le MEME jeton que la creation : c'est
+                  # l'application qui a poste, et rien ne garantit que le jeton
+                  # du job puisse effacer le commentaire d'une autre identite.
+                  #
+                  # 🚨 `|| echo` DELIBERE, et c'est l'exception qui confirme la
+                  # regle « pas de filet inconditionnel » : sous `set -e`, un
+                  # 404 (commentaire deja efface), un 403 (portee du jeton) ou
+                  # une coupure ferait ECHOUER le job ENTIER, ici, au milieu
+                  # d'une boucle par PR. Les PR suivantes ne seraient ni
+                  # etiquetees ni fusionnees ce jour-la — un menage rate
+                  # arreterait le travail utile. L'echec n'est pas avale : il
+                  # devient un ::warning:: nomme. (Rappel maison : `gh api`
+                  # imprime son 404 sur STDOUT tout en sortant non nul.)
+                  GH_TOKEN="$CMD_TOKEN" \
+                    gh api -X DELETE "repos/${REPO}/issues/comments/${cid}" >/dev/null \
+                    || echo "::warning title=Nettoyage de commentaire echoue::PR #$number : le commentaire $cid n'a pas pu etre supprime (404 deja efface, 403 portee du jeton, ou reseau). Le refus de Dependabot est signale ci-dessous ; le commentaire est a retirer a la main."
+                  echo "::warning title=PR Dependabot gelee::PR #$number est en conflit et Dependabot a REFUSE la commande postee par l'application. Son identite n'est donc pas reconnue comme « user with push access » — commenter '@dependabot recreate' a la main, ou passer a un PAT utilisateur."
+                  ;;
+                accepte)
+                  echo "PR #$number : en conflit → '@dependabot recreate' accepte."
+                  recreated=$((recreated + 1))
+                  ;;
+                *)
+                  # Indetermine : marqueur retire pour qu'une passe ulterieure
+                  # reessaie, rien n'est compte. Le retry est sans consequence —
+                  # si le recreate avait abouti, la PR n'est plus DIRTY et la
+                  # re-lecture en tete de bloc sort avant de reposter.
+                  # Meme filet, et il compte DAVANTAGE ici : « indetermine »
+                  # est le chemin COURANT (Dependabot depasse regulierement le
+                  # delai), la ou « refuse » est rare. Un DELETE fatal sur ce
+                  # chemin arreterait le job pour toutes les PR suivantes.
+                  GH_TOKEN="$CMD_TOKEN" \
+                    gh api -X DELETE "repos/${REPO}/issues/comments/${cid}" >/dev/null \
+                    || echo "::warning title=Nettoyage de commentaire echoue::PR #$number : le commentaire $cid n'a pas pu etre supprime (404 deja efface, 403 portee du jeton, ou reseau). Le marqueur peut subsister et bloquer une passe ulterieure — le retirer a la main."
+                  echo "::warning title=Recreate Dependabot indetermine::PR #$number : aucune reponse de Dependabot correlee a notre commande apres 60 s. Ni acceptee, ni refusee — marqueur retire pour qu'une passe ulterieure reessaie."
+                  ;;
+              esac
               continue
             fi
 

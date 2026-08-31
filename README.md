@@ -14,6 +14,7 @@ Shared Sentry configuration with battle-tested PII redaction. Extracted from `ri
 - **User context helper** (`setSentryUser`) for post-auth tagging with tenant/plan
 - **Bot detection** to filter crawler noise
 - **tRPC → Sentry capture** — two integration points: `createTrpcSentryOnError` (tested `onError` for `fetchRequestHandler`) and `createSentryTrpcMiddleware` (wraps the SDK's `trpcMiddleware`, captures resolver throws *with input* at the procedure layer)
+- **Serverless-safe signal** (`signalServerless`) — capture a message **and** hand a bounded transport flush to `waitUntil`, so `captureMessage` isn't lost when a Vercel function freezes on response
 - **Arming guard** (`assertSentryArmed`) — fail loudly when a missing DSN turns Sentry into a silent no-op
 - **Next 16 + Turbopack safety** — peer range excludes the SDK window (#18871) that silently drops server events, plus an opt-in `transport` override on `initSentryServer` for any future transport swap
 - **Cycle-safe** PII walker (WeakSet guard against componentStack / Apollo error.cause loops)
@@ -278,6 +279,53 @@ setup (richer context: input + span); use `createTrpcSentryOnError` when you
 only own the Next.js route handler. Running both is harmless — the middleware
 captures with input and the `onError` acts as a backstop — but once you adopt
 the middleware you can usually drop the manual `onError` capture.
+
+### Signal a serverless condition (capture **and** flush)
+
+`Sentry.captureMessage` enqueues on an **asynchronous** transport and returns.
+A Vercel serverless function is **frozen the instant it responds**, so the queue
+is never drained and the event silently never arrives — every `captureMessage`
+in a serverless route is a blind spot (GRO-1072). `signalServerless` captures the
+message and hands a **bounded** flush to the runtime keep-alive:
+
+```ts
+// app/api/webhooks/knock/route.ts
+import { waitUntil } from '@vercel/functions';
+import { signalServerless } from '@groupe-j/sentry-config';
+
+export async function POST(req: Request) {
+  const count = await countWebhooksReceived();
+  if (count === 0) {
+    // waitUntil is passed IN — the package never imports @vercel/functions.
+    signalServerless('WebhookRecu à 0', waitUntil, {
+      extra: { route: 'knock-webhook' },
+      headers: Object.fromEntries(req.headers), // scrubbed via scrubHeaders
+    });
+  }
+  return new Response('ok');
+}
+```
+
+Three things it gets right, each of which is easy to get wrong:
+
+1. **`defer` (`waitUntil`) is injected, not imported.** Importing
+   `@vercel/functions` into this shared package would bind it to Vercel, though
+   it also serves runtimes with no `waitUntil`. You pass the hook in.
+2. **The flush is *handed to* `defer`, not just launched.** A bare
+   `Sentry.flush()` promise is killed by the freeze exactly like the queue it was
+   meant to drain — orphaning it changes nothing.
+3. **The flush is bounded** (`flushTimeoutMs`, default 2000). Without a bound, a
+   Sentry outage would hold your function open until the platform's max timeout.
+
+`options` also takes `level` (default `"warning"`) and `extra`. The optional
+`headers` are run through `scrubHeaders` before attachment, so credential headers
+(`authorization`, `cookie`, webhook signatures) are dropped while the rest stay
+for debugging. One `captureMessage` per call — one signal, one capture.
+
+> **No `waitUntil`?** In a long-lived Node process (not frozen on response) the
+> event loop stays alive, so you can pass a defer that simply keeps the promise:
+> `signalServerless(msg, (p) => { void p; })`. The freeze problem — and the need
+> for `waitUntil` — is specific to serverless/edge functions.
 
 ### Assert Sentry is actually armed
 

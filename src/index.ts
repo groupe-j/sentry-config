@@ -43,6 +43,14 @@ export { DEFAULT_DENY_URLS, DEFAULT_IGNORED_ERRORS } from "./ignored.js";
 export { withCronMonitor, type CronMonitorOptions } from "./crons.js";
 
 export {
+  signalServerless,
+  DEFAULT_FLUSH_TIMEOUT_MS,
+  type DeferFn,
+  type SentrySeverityLevel,
+  type SignalServerlessOptions,
+} from "./serverless.js";
+
+export {
   createTrpcSentryOnError,
   shouldReportTrpcError,
   type TrpcErrorType,

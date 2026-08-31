@@ -328,6 +328,48 @@ silencieuse, exactement comme elle l'a été jusqu'ici.
 
 ---
 
+## 16. `signalServerless` — `defer` injecté, flush borné, jamais orphelin
+
+**Contexte** : `Sentry.captureMessage` met l'événement en file sur un transport
+**asynchrone** puis rend la main. Une fonction serverless (Vercel) est **gelée
+dès qu'elle répond** : la file n'est jamais vidée, l'événement n'arrive nulle
+part. `grep flush src/` rendait **zéro** avant ce helper — chaque app qui
+appelait `captureMessage` dans une route serverless avait le même trou, et aucune
+ne le savait (GRO-1072).
+
+**Décision** : `signalServerless(message, defer, options?)` fait exactement un
+`captureMessage`, puis `defer(Sentry.flush(flushTimeoutMs))`. Trois propriétés,
+chacune porteuse :
+
+1. **`defer` est INJECTÉ, pas importé.** `waitUntil` vient de `@vercel/functions`.
+   L'importer ici lierait ce package partagé **à Vercel**, alors qu'il sert aussi
+   des runtimes qui n'ont pas de `waitUntil`. Le helper prend le hook en
+   paramètre — même motif que le port `Defer` de `@groupe-j/notifications`.
+2. **Le flush est CONFIÉ à `defer`, pas lancé orphelin.** Une promesse de flush
+   orpheline est tuée par le gel **exactement comme la file** — appeler
+   `Sentry.flush()` sans `defer` ne changerait rien.
+3. **Le flush est BORNÉ** (`flushTimeoutMs`, défaut 2000). Sans borne, une panne
+   Sentry retiendrait la fonction jusqu'au délai maximal de la plateforme : on
+   paierait un incident tiers en latence sur **chaque** requête.
+
+**Pourquoi** : c'est la seule forme qui délivre réellement l'événement sans
+coupler le package à un runtime ni exposer les apps à un pendouillage sur panne
+tierce. Le motif est déjà éprouvé dans le portefeuille (`sentryFailureSink` de
+`@groupe-j/notifications`, `await Sentry.flush(2000)` depuis 0.2.2).
+
+**Conséquences si renversé** :
+- Retirer `defer(...)` (ou remplacer par un `Sentry.flush()` orphelin) → retour
+  au trou d'origine : l'événement se met en file et meurt au gel, **en silence**.
+  Deux tests tombent (`serverless.test.ts` asserte l'identité de la promesse
+  confiée, pas seulement l'appel à flush).
+- Importer `waitUntil` de `@vercel/functions` ici → le package casse à l'install
+  ou au build sur tout consommateur non-Vercel. Un test d'invariant sur le texte
+  source interdit cet import.
+- Retirer la borne → un incident Sentry devient une latence sur toutes les routes
+  qui signalent.
+
+---
+
 ## Comment ajouter une nouvelle décision
 
 Quand tu fais un choix non-évident lors d'un futur refactor :

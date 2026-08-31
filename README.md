@@ -314,8 +314,11 @@ Three things it gets right, each of which is easy to get wrong:
 2. **The flush is *handed to* `defer`, not just launched.** A bare
    `Sentry.flush()` promise is killed by the freeze exactly like the queue it was
    meant to drain — orphaning it changes nothing.
-3. **The flush is bounded** (`flushTimeoutMs`, default 2000). Without a bound, a
-   Sentry outage would hold your function open until the platform's max timeout.
+3. **The flush is bounded and can't crash your function** (`flushTimeoutMs`,
+   default 2000). Without a bound, a Sentry outage would hold your function open
+   until the platform's max timeout; and the flush is `.catch`-ed to `false`
+   before it reaches `defer`, so a rejected flush can't become an unhandled
+   rejection (a process crash) inside the `waitUntil` window.
 
 `options` also takes `level` (default `"warning"`) and `extra`. The optional
 `headers` are run through `scrubHeaders` before attachment, so credential headers

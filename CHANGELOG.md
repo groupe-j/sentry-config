@@ -33,9 +33,13 @@ This project follows [Semantic Versioning](https://semver.org/).
      drain — so flushing without `defer` would change nothing. A test pins the
      identity of the promise `defer` receives, not merely that flush was called;
      removing the `defer(...)` line drops two tests.
-  3. **The flush is bounded** (`flushTimeoutMs`, default 2000). Unbounded, a
-     Sentry outage would hold the function to the platform's max timeout — a
-     third-party incident paid in latency on every request.
+  3. **The flush is bounded** (`flushTimeoutMs`, default 2000) **and cannot
+     escape as an unhandled rejection.** Unbounded, a Sentry outage would hold
+     the function to the platform's max timeout; handed raw, a rejected flush
+     would be an unhandled rejection **during the `waitUntil` window** — a
+     process crash, strictly worse than the lost event. The flush is caught and
+     degraded to `false` (the value `Sentry.flush` already returns on timeout),
+     per the house "toujours un catch pour `waitUntil`" rule.
 
   Reuses the existing `scrubHeaders` for the optional `headers` option instead of
   re-scrubbing by hand at each call site. One `captureMessage` per call (house

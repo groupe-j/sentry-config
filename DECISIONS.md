@@ -348,9 +348,15 @@ chacune porteuse :
 2. **Le flush est CONFIÉ à `defer`, pas lancé orphelin.** Une promesse de flush
    orpheline est tuée par le gel **exactement comme la file** — appeler
    `Sentry.flush()` sans `defer` ne changerait rien.
-3. **Le flush est BORNÉ** (`flushTimeoutMs`, défaut 2000). Sans borne, une panne
-   Sentry retiendrait la fonction jusqu'au délai maximal de la plateforme : on
-   paierait un incident tiers en latence sur **chaque** requête.
+3. **Le flush est BORNÉ et ne peut PAS s'échapper en rejet non-géré.**
+   `flushTimeoutMs` (défaut 2000) borne l'attente ; et la promesse est
+   `.catch`-ée vers `false` avant d'être confiée. Une promesse de flush rejetée
+   confiée brute à `waitUntil` serait un **unhandled rejection dans la fenêtre de
+   keep-alive** — un crash de process, strictement pire que l'événement perdu.
+   On dégrade vers `false` (la valeur que `Sentry.flush` rend déjà sur timeout)
+   plutôt que de re-capturer : le flush échoue *parce que* le transport Sentry
+   est injoignable, re-signaler par le même canal ne ferait que récurser. C'est
+   la règle maison « toujours un `catch` pour `waitUntil` ».
 
 **Pourquoi** : c'est la seule forme qui délivre réellement l'événement sans
 coupler le package à un runtime ni exposer les apps à un pendouillage sur panne
@@ -367,6 +373,10 @@ tierce. Le motif est déjà éprouvé dans le portefeuille (`sentryFailureSink` 
   source interdit cet import.
 - Retirer la borne → un incident Sentry devient une latence sur toutes les routes
   qui signalent.
+- Retirer le `.catch` → un flush qui rejette (transport qui lève) devient un
+  unhandled rejection dans la fenêtre `waitUntil`, donc un crash de container.
+  Un test (`serverless.test.ts`, « neutralises a rejected flush ») asserte que la
+  promesse confiée résout à `false` au lieu de rejeter.
 
 ---
 

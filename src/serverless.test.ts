@@ -70,20 +70,34 @@ describe("signalServerless", () => {
     expect(capturedContext().level).toBe("warning");
   });
 
-  it("hands the flush promise to the injected defer — not orphaned", async () => {
+  it("hands the flush to the injected defer — not orphaned", async () => {
     const { signalServerless } = await loadServerless();
-    // The EXACT promise the transport drain returns. An orphaned flush (a bare
-    // `Sentry.flush()` with no defer) is killed by the serverless freeze exactly
-    // like the queue it was meant to drain — so the test pins the identity of
-    // what defer received, not merely that flush was called.
-    const flushPromise = Promise.resolve(true);
-    flushMock.mockReturnValue(flushPromise);
+    // An orphaned flush (a bare `Sentry.flush()` with no defer) is killed by the
+    // serverless freeze exactly like the queue it was meant to drain. So: defer
+    // must be called exactly once, and the promise it receives must carry the
+    // drain's outcome through — proving it is the flush chain, not a stray promise.
+    flushMock.mockResolvedValue(true);
+    const { defer, handed } = recordingDefer();
+
+    signalServerless("msg", defer);
+
+    expect(flushMock).toHaveBeenCalledTimes(1);
+    expect(handed).toHaveLength(1);
+    await expect(handed[0]).resolves.toBe(true);
+  });
+
+  it("neutralises a rejected flush — the deferred promise resolves, never rejects", async () => {
+    const { signalServerless } = await loadServerless();
+    // A raw rejected flush handed to waitUntil is an unhandled rejection during
+    // the keep-alive window — a process crash, strictly worse than the lost event
+    // this feature exists to fix (and against our own "toujours un catch" rule).
+    flushMock.mockRejectedValue(new Error("transport exploded"));
     const { defer, handed } = recordingDefer();
 
     signalServerless("msg", defer);
 
     expect(handed).toHaveLength(1);
-    expect(handed[0]).toBe(flushPromise);
+    await expect(handed[0]).resolves.toBe(false);
   });
 
   it("bounds the flush at 2000ms by default", async () => {

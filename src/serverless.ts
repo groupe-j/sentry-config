@@ -120,5 +120,13 @@ export function signalServerless(
   // Hand the drain to the runtime, bounded. Orphaning it (no defer) would let
   // the freeze kill it exactly like the queue; leaving it unbounded would let a
   // Sentry outage hold the function to the platform max. Both are wrong.
-  defer(Sentry.flush(flushTimeoutMs));
+  //
+  // `.catch` is not optional: a raw rejected flush handed to `waitUntil` is an
+  // unhandled rejection during the keep-alive window — a process crash, strictly
+  // worse than the lost event this helper exists to fix (and against the house
+  // "toujours un catch pour waitUntil" rule). We swallow to `false` — the same
+  // value `Sentry.flush` already returns on timeout — rather than re-capturing:
+  // the flush is failing *because* the Sentry transport is unreachable, so
+  // reporting that through the same channel would only recurse.
+  defer(Sentry.flush(flushTimeoutMs).catch(() => false));
 }

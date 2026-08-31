@@ -289,6 +289,51 @@ Tenant/org/agency id for multi-tenant apps (ridesamui, prono.pro, mirey).
 
 ***
 
+### SignalServerlessOptions
+
+Defined in: [serverless.ts:75](https://github.com/groupe-j/sentry-config/blob/main/src/serverless.ts#L75)
+
+#### Properties
+
+##### extra?
+
+> `optional` **extra?**: `Record`\<`string`, `unknown`\>
+
+Defined in: [serverless.ts:82](https://github.com/groupe-j/sentry-config/blob/main/src/serverless.ts#L82)
+
+Structured context attached to the event. Redacted by `beforeSend` at send
+time like any other `extra`, so PII keys are scrubbed there too.
+
+##### flushTimeoutMs?
+
+> `optional` **flushTimeoutMs?**: `number`
+
+Defined in: [serverless.ts:92](https://github.com/groupe-j/sentry-config/blob/main/src/serverless.ts#L92)
+
+Max ms to wait for the transport queue to drain. Default: 2000.
+
+##### headers?
+
+> `optional` **headers?**: `Record`\<`string`, `string`\>
+
+Defined in: [serverless.ts:90](https://github.com/groupe-j/sentry-config/blob/main/src/serverless.ts#L90)
+
+Raw request headers to attach for debugging. Scrubbed with `scrubHeaders`
+before attachment — credential-bearing headers (`authorization`, `cookie`,
+webhook signatures) are dropped entirely; the rest survive under
+`extra.headers`. Reuses the package's canonical scrubber rather than
+re-implementing it per route.
+
+##### level?
+
+> `optional` **level?**: [`SentrySeverityLevel`](#sentryseveritylevel)
+
+Defined in: [serverless.ts:77](https://github.com/groupe-j/sentry-config/blob/main/src/serverless.ts#L77)
+
+Severity for the captured message. Default: `"warning"`.
+
+***
+
 ### TrpcErrorLike
 
 Defined in: [trpc.ts:64](https://github.com/groupe-j/sentry-config/blob/main/src/trpc.ts#L64)
@@ -394,6 +439,39 @@ Defined in: [trpc.ts:88](https://github.com/groupe-j/sentry-config/blob/main/src
 
 ## Type Aliases
 
+### DeferFn
+
+> **DeferFn** = (`promise`) => `void`
+
+Defined in: [serverless.ts:69](https://github.com/groupe-j/sentry-config/blob/main/src/serverless.ts#L69)
+
+A runtime keep-alive hook — Vercel's `waitUntil`, or any function that keeps
+the process alive until the given promise settles. **Injected, never imported**
+(see the module doc). The return value is ignored.
+
+#### Parameters
+
+##### promise
+
+`Promise`\<`unknown`\>
+
+#### Returns
+
+`void`
+
+***
+
+### SentrySeverityLevel
+
+> **SentrySeverityLevel** = `"fatal"` \| `"error"` \| `"warning"` \| `"log"` \| `"info"` \| `"debug"`
+
+Defined in: [serverless.ts:62](https://github.com/groupe-j/sentry-config/blob/main/src/serverless.ts#L62)
+
+Sentry severity levels. Typed locally to keep this package decoupled from the
+SDK's own types (see DECISIONS §11) — the SDK validates the string at runtime.
+
+***
+
 ### SentryTrpcMiddleware
 
 > **SentryTrpcMiddleware** = \<`T`\>(`opts`) => [`SentryTrpcMiddlewareResult`](#sentrytrpcmiddlewareresult)\<`T`\>
@@ -451,6 +529,17 @@ The tRPC error type passed by the fetch adapter's `onError`.
 > `const` **DEFAULT\_DENY\_URLS**: `RegExp`[]
 
 Defined in: [ignored.ts:43](https://github.com/groupe-j/sentry-config/blob/main/src/ignored.ts#L43)
+
+***
+
+### DEFAULT\_FLUSH\_TIMEOUT\_MS
+
+> `const` **DEFAULT\_FLUSH\_TIMEOUT\_MS**: `2000` = `2_000`
+
+Defined in: [serverless.ts:73](https://github.com/groupe-j/sentry-config/blob/main/src/serverless.ts#L73)
+
+Default flush budget: long enough to drain a healthy transport, short enough
+ that a Sentry outage can't hold the function past this.
 
 ***
 
@@ -882,6 +971,38 @@ reported. Fails open so a new server-fault code is never silently dropped.
 #### Returns
 
 `boolean`
+
+***
+
+### signalServerless()
+
+> **signalServerless**(`message`, `defer`, `options?`): `void`
+
+Defined in: [serverless.ts:102](https://github.com/groupe-j/sentry-config/blob/main/src/serverless.ts#L102)
+
+Capture a serverless signal and hand a bounded transport flush to `defer`.
+
+Exactly one `captureMessage` per call (one signal, one capture). The flush is
+queued *after* the capture so the drain sees the event, and handed to `defer`
+so the runtime keeps the function alive until it settles.
+
+#### Parameters
+
+##### message
+
+`string`
+
+##### defer
+
+[`DeferFn`](#deferfn)
+
+##### options?
+
+[`SignalServerlessOptions`](#signalserverlessoptions) = `{}`
+
+#### Returns
+
+`void`
 
 ***
 

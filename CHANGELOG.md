@@ -3,6 +3,53 @@
 All notable changes to `@groupe-j/sentry-config` are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-08-31
+
+### Added
+
+- **`signalServerless(message, defer, options?)`** — capture a message **and**
+  hand a bounded transport flush to the runtime, so a serverless signal actually
+  arrives (GRO-1072).
+
+  `Sentry.captureMessage` enqueues on an **asynchronous** transport and returns.
+  A Vercel serverless function is **frozen the instant it responds**, so the
+  queue is never drained and the event silently never arrives. `grep flush src/`
+  on this package returned **zero** before this helper: every app calling
+  `captureMessage` in a serverless route had the same blind spot, and by
+  construction none of them knew — the channel that would report it is the one
+  that is broken. Found on the CRM while fixing GRO-1068 (`onOutcome` had been
+  reporting "push partiellement échoué" for weeks into a void).
+
+  Three properties, each load-bearing — and each pinned by a test:
+
+  1. **`defer` is injected, not imported.** The runtime keep-alive is Vercel's
+     `waitUntil` (`@vercel/functions`); importing it here would bind this shared,
+     platform-agnostic package to Vercel, though it also serves contexts that
+     have no `waitUntil`. The caller passes the hook in. Same port as the
+     `Defer` seam of `@groupe-j/notifications`. A source-invariant test asserts
+     this module never imports `@vercel/functions`.
+  2. **The flush is handed to `defer`, not orphaned.** A bare `Sentry.flush()`
+     promise is killed by the freeze exactly like the queue it was meant to
+     drain — so flushing without `defer` would change nothing. A test pins the
+     identity of the promise `defer` receives, not merely that flush was called;
+     removing the `defer(...)` line drops two tests.
+  3. **The flush is bounded** (`flushTimeoutMs`, default 2000) **and cannot
+     escape as an unhandled rejection.** Unbounded, a Sentry outage would hold
+     the function to the platform's max timeout; handed raw, a rejected flush
+     would be an unhandled rejection **during the `waitUntil` window** — a
+     process crash, strictly worse than the lost event. The flush is caught and
+     degraded to `false` (the value `Sentry.flush` already returns on timeout),
+     per the house "toujours un catch pour `waitUntil`" rule.
+
+  Reuses the existing `scrubHeaders` for the optional `headers` option instead of
+  re-scrubbing by hand at each call site. One `captureMessage` per call (house
+  rule: one signal, one capture). See [DECISIONS.md](./DECISIONS.md) §16.
+
+  The precedent already lived in the portfolio: `@groupe-j/notifications`'
+  `sentryFailureSink` has done `await Sentry.flush(2000)` since 0.2.2 for exactly
+  this reason. This lifts the pattern into the shared package so every app gets
+  it. Additive, backward-compatible: **minor**.
+
 ## [1.1.0] - 2026-08-16
 
 ### Added

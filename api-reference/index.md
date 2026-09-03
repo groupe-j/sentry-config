@@ -528,7 +528,7 @@ The tRPC error type passed by the fetch adapter's `onError`.
 
 > `const` **DEFAULT\_DENY\_URLS**: `RegExp`[]
 
-Defined in: [ignored.ts:43](https://github.com/groupe-j/sentry-config/blob/main/src/ignored.ts#L43)
+Defined in: [ignored.ts:55](https://github.com/groupe-j/sentry-config/blob/main/src/ignored.ts#L55)
 
 ***
 

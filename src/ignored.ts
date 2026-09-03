@@ -29,6 +29,18 @@ export const DEFAULT_IGNORED_ERRORS: (string | RegExp)[] = [
   /Non-Error promise rejection captured/i,
   /hydration/i,
 
+  // DOM reconciliation errors from page-translation extensions (Google
+  // Translate, Microsoft Translator, in-browser translators) that mutate the
+  // live DOM under React's feet. React then fails to remove/insert a node it no
+  // longer owns and throws a `NotFoundError`. The stack is 100% React-internal,
+  // so it carries no `…-extension://` frame — `denyUrls` and the beforeSend
+  // extension filter never see it, and only a message match catches it. Observed
+  // portfolio-wide with 0 users impacted (PRONOSTIC-2W / -2V on /auth/*); the
+  // canonical non-actionable browser noise. Matched on the message substring so
+  // a genuine app-thrown NotFoundError with a different message still reports.
+  /Failed to execute 'removeChild' on 'Node'/,
+  /Failed to execute 'insertBefore' on 'Node'/,
+
   // Browser extensions injecting code
   "Script error.",
   /chrome-extension/,

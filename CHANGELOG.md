@@ -3,6 +3,26 @@
 All notable changes to `@groupe-j/sentry-config` are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [1.2.1] - 2026-09-03
+
+### Added
+
+- **`DEFAULT_IGNORED_ERRORS`** now drops the two canonical DOM-reconciliation
+  `NotFoundError`s — `Failed to execute 'removeChild' on 'Node'` and
+  `Failed to execute 'insertBefore' on 'Node'`.
+
+  These come from in-browser page translators (Google Translate, Microsoft
+  Translator) mutating the live DOM under React, which then fails to remove or
+  insert a node it no longer owns. The stack is 100% React-internal, so it
+  carries **no `…-extension://` frame** — `denyUrls` and the `beforeSend`
+  extension filter never see it, and only a message match catches it. Observed
+  portfolio-wide with **0 users impacted** (PRONOSTIC-2W / -2V on `/auth/*`):
+  non-actionable noise that still cost ingestion quota. Matched on the message
+  substring, so a genuine app-thrown `NotFoundError` with a different message
+  still reports (pinned by `ignored.test.ts`).
+
+  Patch, not minor: more filtering, no API change, no default-sample-rate change.
+
 ## [1.2.0] - 2026-08-31
 
 ### Added

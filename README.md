@@ -540,7 +540,8 @@ shape (a name or street address in a free-text message) — see DECISIONS.md §1
 | `NEXT_PUBLIC_SENTRY_DSN` | Client (Doppler → Vercel) | client |
 | `SENTRY_ENVIRONMENT` | Optional, server | environment tag (overrides `VERCEL_ENV`/`NODE_ENV`) |
 | `NEXT_PUBLIC_SENTRY_ENVIRONMENT` | Optional, client | environment tag in the browser bundle |
-| `VERCEL_ENV` | Auto on Vercel | environment tag (fallback) |
+| `VERCEL_ENV` | Auto on Vercel | environment tag (fallback, server) |
+| `NEXT_PUBLIC_VERCEL_ENV` | Auto on Vercel (Next.js, system env vars exposed) | environment tag in the browser bundle (fallback after `VERCEL_ENV`): without it a preview's browser errors are tagged `production` |
 | `VERCEL_GIT_COMMIT_SHA` | Auto on Vercel | release tracking |
 | `NODE_ENV` | Auto | sample rates + enabled flag + environment fallback |
 | `NEXT_PUBLIC_SENTRY_WEBVITAL_SAMPLE_RATE` | Optional, client | web-vital (INP) sample rate — default `1.0` |

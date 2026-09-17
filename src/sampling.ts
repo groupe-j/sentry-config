@@ -97,6 +97,12 @@ export const SENTRY_ENVIRONMENT =
   process.env.SENTRY_ENVIRONMENT ??
   process.env.NEXT_PUBLIC_SENTRY_ENVIRONMENT ??
   process.env.VERCEL_ENV ??
+  // Browser bundle: `VERCEL_ENV` is not a `NEXT_PUBLIC_*` var, so it is absent
+  // there, while `NODE_ENV` is "production" for every `next build` — previews
+  // included. Vercel exposes the same value to Next.js builds as
+  // `NEXT_PUBLIC_VERCEL_ENV`. Read AFTER `VERCEL_ENV`, so the server
+  // resolution is unchanged.
+  process.env.NEXT_PUBLIC_VERCEL_ENV ??
   process.env.NODE_ENV ??
   "development";
 

@@ -98,3 +98,62 @@ describe("createSentryBeforeSend — lead PII in extra/contexts (M5)", () => {
     expect(out.contexts.trace.op).toBe("http.server");
   });
 });
+
+describe("isSensitive — clés françaises des formulaires du portefeuille", () => {
+  it.each([
+    "nom",
+    "Nom",
+    "prenom",
+    "prénom",
+    "Prénom",
+    "adresse",
+    "commune",
+    "codepostal",
+    "code_postal",
+    "codePostal",
+    "code-postal",
+    "Code Postal",
+    "telephone",
+    "téléphone",
+    "tel",
+    "tél",
+    "portable",
+    "ville",
+    "raison_sociale",
+    "raisonSociale",
+    "Raison sociale",
+    "siret",
+    "SIRET",
+  ])("redacts %s (case, accents and separators folded)", (key) => {
+    expect(isSensitive(key)).toBe(true);
+  });
+
+  // Exact match after folding, never a substring: these share a prefix with a
+  // PII key and must survive.
+  it.each(["nombre", "nomenclature", "nomFichier", "dénomination", "telemetrie", "communication", "portabilite", "villeId"])(
+    "keeps %s",
+    (key) => {
+      expect(isSensitive(key)).toBe(false);
+    },
+  );
+
+  it("redacts the French PII of a form payload and nothing else", () => {
+    expect(
+      redact({
+        prénom: "Jean",
+        nom: "Dupont",
+        code_postal: "57000",
+        raisonSociale: "Dupont SARL",
+        nombre: 3,
+        nomenclature: "NAF 71.11Z",
+      }),
+    ).toEqual({
+      prénom: REDACTED,
+      nom: REDACTED,
+      code_postal: REDACTED,
+      raisonSociale: REDACTED,
+      nombre: 3,
+      nomenclature: "NAF 71.11Z",
+    });
+  });
+});

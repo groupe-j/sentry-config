@@ -659,7 +659,7 @@ Extend per-app via `ignoreErrors: [...DEFAULT_IGNORED_ERRORS, ...yourCustom]`.
 
 > `const` **REDACTED**: `"[REDACTED]"` = `"[REDACTED]"`
 
-Defined in: [redaction.ts:100](https://github.com/groupe-j/sentry-config/blob/main/src/redaction.ts#L100)
+Defined in: [redaction.ts:116](https://github.com/groupe-j/sentry-config/blob/main/src/redaction.ts#L116)
 
 ***
 
@@ -823,7 +823,7 @@ two orders of magnitude in volume and 10% is calibrated for the loud one.
 
 > `const` **SENTRY\_WEBVITAL\_SAMPLE\_RATE**: `number`
 
-Defined in: [sampling.ts:117](https://github.com/groupe-j/sentry-config/blob/main/src/sampling.ts#L117)
+Defined in: [sampling.ts:123](https://github.com/groupe-j/sentry-config/blob/main/src/sampling.ts#L123)
 
 Web-vital sample rate — INP & friends.
 
@@ -962,7 +962,7 @@ Everything else is forwarded untouched. The return type is exactly what
 
 > **createTracesSampler**(`defaultRate?`, `webVitalRate?`): (`ctx`) => `number`
 
-Defined in: [sampling.ts:211](https://github.com/groupe-j/sentry-config/blob/main/src/sampling.ts#L211)
+Defined in: [sampling.ts:217](https://github.com/groupe-j/sentry-config/blob/main/src/sampling.ts#L217)
 
 Builds a `tracesSampler` that returns 0 for low-value routes.
 Pass to `Sentry.init({ tracesSampler: createTracesSampler(0.1) })`.
@@ -1089,7 +1089,7 @@ or a JSON field, `code: "ERR_INVALID_ARG_TYPE"` is a diagnostic.
 
 > **isSensitive**(`key`): `boolean`
 
-Defined in: [redaction.ts:102](https://github.com/groupe-j/sentry-config/blob/main/src/redaction.ts#L102)
+Defined in: [redaction.ts:132](https://github.com/groupe-j/sentry-config/blob/main/src/redaction.ts#L132)
 
 #### Parameters
 
@@ -1107,7 +1107,7 @@ Defined in: [redaction.ts:102](https://github.com/groupe-j/sentry-config/blob/ma
 
 > **redact**(`value`, `seen?`): `unknown`
 
-Defined in: [redaction.ts:107](https://github.com/groupe-j/sentry-config/blob/main/src/redaction.ts#L107)
+Defined in: [redaction.ts:136](https://github.com/groupe-j/sentry-config/blob/main/src/redaction.ts#L136)
 
 #### Parameters
 
@@ -1179,7 +1179,7 @@ Key-name redaction AND value scrubbing, recursively. Returns new containers
 
 > **scrubHeaders**(`headers`): `Record`\<`string`, `string`\>
 
-Defined in: [redaction.ts:148](https://github.com/groupe-j/sentry-config/blob/main/src/redaction.ts#L148)
+Defined in: [redaction.ts:177](https://github.com/groupe-j/sentry-config/blob/main/src/redaction.ts#L177)
 
 #### Parameters
 

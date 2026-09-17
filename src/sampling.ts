@@ -90,7 +90,8 @@ export const SENTRY_BROWSER_TRACES_SAMPLE_RATE = parseRate(
  * `NEXT_PUBLIC_*` vars (Next.js inlines those at build time and drops
  * non-public ones), so client consumers set `NEXT_PUBLIC_SENTRY_ENVIRONMENT`.
  * Both fall through to `VERCEL_ENV` (prod/preview; `NEXT_PUBLIC_VERCEL_ENV` in
- * the browser bundle) and `NODE_ENV` (local/test) when unset, so dev/preview/prod behaviour is unchanged unless an app opts in
+ * the browser bundle) and `NODE_ENV` (local/test) when unset, so
+ * dev/preview/prod behaviour is unchanged unless an app opts in
  * — e.g. a CI e2e run booting under `next start` that wants `environment: "ci"`.
  */
 export const SENTRY_ENVIRONMENT =

@@ -268,9 +268,13 @@ describe("scrubText — clés françaises", () => {
   it("keeps the broad French keys (`nom`, `ville`, `commune`) in SQL, like `name` and `city`", () => {
     const sql = `SELECT * FROM "produit" WHERE "nom" = 'Chaise' AND "ville" = 'Metz' AND "commune" = 'Metz' ORDER BY "nom" ASC`;
     expect(scrubText(sql)).toBe(sql);
-    expect(scrubText('data: { nom: "Dupont", ville: "Metz", commune: "Metz" }')).toBe(
-      'data: { nom: "[redacted]", ville: "[redacted]", commune: "[redacted]" }',
-    );
+    // Same deliberate blind spot as `name`: a quoted `=` pair (logfmt) is kept…
+    expect(scrubText('nom="Jean Dupont" action=signup')).toBe('nom="Jean Dupont" action=signup');
+    expect(scrubText('name="Jean Dupont" action=signup')).toBe('name="Jean Dupont" action=signup');
+    // …while a non-broad key in the same shape is not, so the rule above is what keeps them.
+    expect(scrubText(`WHERE "prenom" = 'Chaise'`)).toBe(`WHERE "prenom" = '[redacted]'`);
+    // Unquoted (URL, form) stays redacted.
+    expect(scrubText("?nom=Dupont&ville=Metz")).toBe("?nom=[redacted]&ville=[redacted]");
   });
 
   it("redacts them in an ORM dump and a form body", () => {

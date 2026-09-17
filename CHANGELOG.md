@@ -34,9 +34,11 @@ This project follows [Semantic Versioning](https://semver.org/).
   Correspondance exacte après repli, jamais par sous-chaîne : `nombre`,
   `nomenclature`, `nomFichier`, `dénomination`, `communication` restent en
   clair (épinglé par test).
-  Comme `name` et `city`, `nom`, `ville` et `commune` ne sont rédigés dans du
-  texte qu'avec le séparateur `:` : `"nom" = 'Chaise'` dans une requête SQL
-  reste lisible (épinglé par test).
+  Comme pour `name` et `city`, une valeur **entre guillemets** de `nom`,
+  `ville` ou `commune` n'est rédigée dans du texte qu'avec le séparateur `:` :
+  `"nom" = 'Chaise'` en SQL reste lisible, et `nom="Jean"` en logfmt aussi
+  (même angle mort, choisi, que `name`). `nom=Dupont` (URL, formulaire) est
+  toujours rédigé. Épinglé par test.
 
   Patch : plus de rédaction, aucune API retirée, aucun taux modifié. Coût
   pour une clé ASCII inchangé (la normalisation Unicode ne s'exécute que sur

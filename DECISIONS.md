@@ -410,7 +410,9 @@ garantie primaire. Les objections de la décision 1 contre la regex restent
 vraies, et chacune a sa parade :
 - *Faux positifs* : pas de détection générique de « ce qui ressemble à un secret ».
   Un nom **faible** (`code`, `key`, `sid`) n'est sensible que dans une URL et
-  pour une valeur d'au moins 8 caractères : `code=500`, `key=theme` et un
+  pour une valeur d'au moins 6 caractères (un code à usage unique envoyé par
+  email en fait 6) qui n'a pas la forme d'un code d'erreur (`ERR_…`) : `code=500`,
+  `key=theme` et un
   `code: "ERR_INVALID_ARG_TYPE"` en contexte survivent. `Bearer undefined` survit
   aussi : c'est un diagnostic. Une liste de messages ordinaires est épinglée
   octet pour octet par `scrub.test.ts`.
@@ -437,16 +439,21 @@ ne se voit **nulle part**, puisque l'événement part normalement. Chaque appel
 et chaque motif est couvert par au moins un test qui échoue quand on le retire
 (tests de mutation lancés à la livraison).
 
-**Compatibilité navigateur** : les motifs utilisent des lookbehinds et `\p{L}`.
-Une regex non supportée est une `SyntaxError` au **chargement du module**, ce qui
-casserait tout Sentry côté client. Il faut Safari ≥ 16.4, soit la cible
-minimale de Next.js 16, que tout le portefeuille utilise. Une app qui cible un
-navigateur plus ancien ne doit pas utiliser `/client` sans transpiler ces regex.
+**Compatibilité navigateur** : trois motifs utilisent des lookbehinds et `\p{L}`
+(Safari ≥ 16.4, soit la cible minimale de Next.js 16). Écrits en **littéraux**,
+ils provoqueraient une `SyntaxError` au parsing sur un moteur plus ancien, et
+casseraient tout le chunk qui les embarque, code applicatif compris. Ils sont
+donc compilés **paresseusement** depuis des chaînes (`compileModernPatterns`).
+Sur un vieux navigateur, `scrubText` lève, les hooks passent en fail-closed, et
+l'événement part minimal. Un test d'invariant refuse tout lookbehind ou `\p{…}`
+écrit en littéral dans les sources de la rédaction.
 
 **Hors périmètre, délibérément** : `event.user`, dont l'email n'arrive que par
-l'opt-in explicite `setSentryUser({ email })`. Les attributs de scope des logs
-(`user.*`) aussi : le SDK les fusionne **après** `beforeSendLog`, aucun hook ne
-peut donc les voir.
+l'opt-in explicite `setSentryUser({ email })`. Dans les **logs**, en revanche, le
+SDK pose `user.id`, `user.email` et `user.name` **avant** `beforeSendLog`
+(`core/logs/internal.js`). Ils sont donc rédigés, sauf `user.id`. Seuls les
+attributs de scope arbitraires sont fusionnés après le hook et échappent à
+toute rédaction.
 
 **Limites connues** (pas couvertes) :
 - un token placé dans le **chemin** d'une URL (`/invite/<token>`, `/reset/<token>`) ;
@@ -457,10 +464,21 @@ peut donc les voir.
 - une valeur numérique dans un JSON tronqué par le SDK ;
 - les PII sans motif reconnaissable (nom, adresse postale) dans un message libre.
 
+- une valeur de détail Postgres de plus de 1 024 caractères, un JWT dont le payload
+  dépasse 65 Ko, un secret à préfixe collé à un autre mot (`tokensk_live_…`) :
+  ce sont les bornes anti-ReDoS ;
+- les préfixes non listés (`vck_…`) et les emails collés à un chiffre (`jean@x.com1`).
+
 Ces cas restent à la charge de l'appelant. Faux positifs acceptés :
-`name: "web"` dans un dump de configuration (la clé large n'est appliquée
-qu'avec le séparateur `:`, jamais au `=` du SQL), `nextPageToken=…`, et
-`key=<valeur de 6 caractères ou plus>` dans une URL.
+- `name: "web"` dans un dump de configuration. La clé large ne s'applique
+  qu'avec le séparateur `:`, jamais au `=` du SQL ;
+- `nextPageToken=…`, et `key=<valeur de 6 caractères ou plus>` dans une URL ;
+- `cache key (user)=(42)` ;
+- `Invalid params: …` quand le même texte contient aussi `Failed query` ;
+- `Bearer <mot de 20 lettres ou plus>`.
+
+Deux passes de revue indépendante ont été faites sur ce motif ; les constats
+ouverts restants sont ceux listés ici.
 
 ---
 

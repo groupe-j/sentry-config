@@ -11,9 +11,24 @@
  */
 
 export {
+  SCRUB_FAILED_TAG,
   createSentryBeforeSend,
+  createSentryBeforeSendLog,
+  createSentryBeforeSendTransaction,
   type SentryEventLike,
+  type SentryLogLike,
 } from "./before-send.js";
+
+export {
+  REDACTED_VALUE,
+  isSecretName,
+  isSecretParam,
+  scrubCookies,
+  scrubDeep,
+  scrubQueryString,
+  scrubRequestData,
+  scrubText,
+} from "./scrub.js";
 
 export {
   REDACTED,

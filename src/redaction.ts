@@ -17,8 +17,9 @@
  * → any library-set `location` in `extra`/breadcrumb data. All become `[REDACTED]`.
  * Accepted, visible cost — in this lead-heavy portfolio these are high-risk PII
  * fields, and the sibling `*.version`/`op`/`trace_id` context fields survive for
- * debugging. Exception values/stack frames are never passed through `redact`, so
- * error messages and filenames are unaffected.
+ * debugging. Exception values are never passed through `redact` (a message has
+ * no key names); free text goes through `scrubText` in ./scrub.ts instead, which
+ * replaces PII VALUES inside the text and leaves filenames untouched.
  *
  * Why WeakSet cycle guard: Sentry events hold cycles via
  * `contexts.react.componentStack` or error.cause chains from Apollo/Prisma.

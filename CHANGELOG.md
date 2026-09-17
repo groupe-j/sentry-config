@@ -3,6 +3,59 @@
 All notable changes to `@groupe-j/sentry-config` are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - 2026-09-17
+
+### Added
+
+- **Nettoyage des valeurs dans le texte libre** (GRO-1495). La rédaction par nom
+  de clé ne lisait jamais une **valeur**. Tout ce qui voyageait dans une chaîne
+  partait donc en clair :
+  - le **message** d'une exception, et chaque `cause` liée (que le SDK remonte
+    comme une entrée distincte de `exception.values`). `DrizzleQueryError` vaut
+    `Failed query: <sql>\nparams: <valeurs>` : adresse email, token de magic-link
+    en clair (`storeToken: "plain"`), clé de compteur `magic-link:<adresse>`.
+    Le `detail` Postgres `Key (email)=(…) already exists.` et le dump d'arguments
+    Prisma aussi ;
+  - `request.data` capturé comme **chaîne JSON** : `redact` rendait la chaîne
+    telle quelle ;
+  - `request.url` (le SDK y garde la query : `?token=…`), `request.query_string`,
+    `request.cookies` ;
+  - les messages de breadcrumbs (console : `console.error(msg, err)` recopie le
+    message de l'ORM), `event.message` / `logentry`, les tags, les `vars` de
+    frames, les descriptions et attributs de spans, les lignes de log.
+
+  Seule la **valeur** devient `[redacted]`. Le SQL, la contrainte et le nom du
+  paramètre restent, donc l'erreur reste diagnosticable. Motifs et parades aux
+  faux positifs : DECISIONS.md §17. Des cas réels sont épinglés dans
+  `scrub.test.ts` : `DrizzleQueryError` avec params, `detail` Postgres, dump
+  Prisma P2002, body JSON avec email et token, JSON tronqué, formulaire,
+  magic-link, OAuth `code`, JWT et préfixes de secrets. Une liste de messages
+  ordinaires doit rester **identique octet pour octet**.
+
+- **`createSentryBeforeSendTransaction()`** et **`createSentryBeforeSendLog()`**,
+  branchés par `initSentryServer` (les deux), `initSentryEdge` et
+  `initSentryClient` (transactions). Une transaction porte la même
+  `request.url` qu'une erreur, et une ligne de log le même message d'ORM.
+  Une app qui appelle `Sentry.init` elle-même doit les ajouter (README).
+
+- **Fail-closed** : si le nettoyage lève une exception, l'événement ne part ni
+  brut ni nulle part. Part un événement minimal (types d'exception, frames sans
+  locals, métadonnées d'enveloppe) tagué `pii_scrub_failed: "true"`.
+
+- Exports : `scrubText`, `scrubDeep`, `scrubRequestData`, `scrubQueryString`,
+  `scrubCookies`, `isSecretName`, `isSecretParam`, `REDACTED_VALUE`,
+  `SCRUB_FAILED_TAG`, `SentryLogLike`. `SentryEventLike` gagne des champs
+  optionnels (`message`, `logentry`, `transaction`, `request.url`,
+  `request.query_string`, `request.cookies`, `breadcrumbs[].message`, `spans`,
+  `frames[].vars`).
+
+Minor et non patch : nouvelle API, et deux nouveaux hooks posés par les init
+helpers. Rien n'est retiré. Le taux d'échantillonnage ne change pas.
+
+Coût : chaque motif est protégé par un `includes` et tout quantificateur ouvert
+est borné. Une chaîne adverse de 100 Ko reste linéaire, et un événement d'environ
+40 Ko se nettoie en quelques millisecondes. Les deux sont épinglés par un test.
+
 ## [1.2.1] - 2026-09-03
 
 ### Added

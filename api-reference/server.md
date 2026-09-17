@@ -4,7 +4,7 @@
 
 ### InitSentryServerOptions
 
-Defined in: [server.ts:24](https://github.com/groupe-j/sentry-config/blob/main/src/server.ts#L24)
+Defined in: [server.ts:28](https://github.com/groupe-j/sentry-config/blob/main/src/server.ts#L28)
 
 #### Properties
 
@@ -12,7 +12,7 @@ Defined in: [server.ts:24](https://github.com/groupe-j/sentry-config/blob/main/s
 
 > **app**: `string`
 
-Defined in: [server.ts:26](https://github.com/groupe-j/sentry-config/blob/main/src/server.ts#L26)
+Defined in: [server.ts:30](https://github.com/groupe-j/sentry-config/blob/main/src/server.ts#L30)
 
 App name — tagged on every event for multi-tenant dashboards.
 
@@ -20,7 +20,7 @@ App name — tagged on every event for multi-tenant dashboards.
 
 > `optional` **dsn?**: `string`
 
-Defined in: [server.ts:28](https://github.com/groupe-j/sentry-config/blob/main/src/server.ts#L28)
+Defined in: [server.ts:32](https://github.com/groupe-j/sentry-config/blob/main/src/server.ts#L32)
 
 Override the server DSN (default: process.env.SENTRY_DSN).
 
@@ -28,7 +28,7 @@ Override the server DSN (default: process.env.SENTRY_DSN).
 
 > `optional` **extraIntegrations?**: `unknown`[]
 
-Defined in: [server.ts:44](https://github.com/groupe-j/sentry-config/blob/main/src/server.ts#L44)
+Defined in: [server.ts:48](https://github.com/groupe-j/sentry-config/blob/main/src/server.ts#L48)
 
 Custom integrations to add (in addition to defaults).
 
@@ -36,7 +36,7 @@ Custom integrations to add (in addition to defaults).
 
 > `optional` **ignoreErrors?**: (`string` \| `RegExp`)[]
 
-Defined in: [server.ts:42](https://github.com/groupe-j/sentry-config/blob/main/src/server.ts#L42)
+Defined in: [server.ts:46](https://github.com/groupe-j/sentry-config/blob/main/src/server.ts#L46)
 
 Extra error patterns to ignore (merged with DEFAULT_IGNORED_ERRORS).
 
@@ -44,7 +44,7 @@ Extra error patterns to ignore (merged with DEFAULT_IGNORED_ERRORS).
 
 > `optional` **prisma?**: `boolean`
 
-Defined in: [server.ts:30](https://github.com/groupe-j/sentry-config/blob/main/src/server.ts#L30)
+Defined in: [server.ts:34](https://github.com/groupe-j/sentry-config/blob/main/src/server.ts#L34)
 
 Enable Prisma query instrumentation (default true).
 
@@ -52,7 +52,7 @@ Enable Prisma query instrumentation (default true).
 
 > `optional` **profiling?**: `boolean`
 
-Defined in: [server.ts:40](https://github.com/groupe-j/sentry-config/blob/main/src/server.ts#L40)
+Defined in: [server.ts:44](https://github.com/groupe-j/sentry-config/blob/main/src/server.ts#L44)
 
 Enable Node.js profiling. Default: true (requires @sentry/profiling-node
 as a peer dep). Set false if your platform doesn't support it (Vercel
@@ -66,7 +66,7 @@ runtime) supports it.
 
 > `optional` **sendDefaultPii?**: `boolean`
 
-Defined in: [server.ts:50](https://github.com/groupe-j/sentry-config/blob/main/src/server.ts#L50)
+Defined in: [server.ts:54](https://github.com/groupe-j/sentry-config/blob/main/src/server.ts#L54)
 
 Send default PII (cookies, headers, IP). Default: false (RGPD-safer).
 Set true only when you have explicit user consent and need the data
@@ -76,7 +76,7 @@ for debugging (e.g. internal admin tools).
 
 > `optional` **transport?**: `unknown`
 
-Defined in: [server.ts:66](https://github.com/groupe-j/sentry-config/blob/main/src/server.ts#L66)
+Defined in: [server.ts:70](https://github.com/groupe-j/sentry-config/blob/main/src/server.ts#L70)
 
 Override the Sentry transport factory. Passed straight through to
 `Sentry.init({ transport })`; when omitted the SDK's own transport is used
@@ -98,7 +98,7 @@ internal transport types; `Sentry.init` validates it at runtime.
 
 > **initSentryServer**(`opts`): `void`
 
-Defined in: [server.ts:69](https://github.com/groupe-j/sentry-config/blob/main/src/server.ts#L69)
+Defined in: [server.ts:73](https://github.com/groupe-j/sentry-config/blob/main/src/server.ts#L73)
 
 #### Parameters
 

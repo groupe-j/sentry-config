@@ -380,6 +380,65 @@ tierce. Le motif est déjà éprouvé dans le portefeuille (`sentryFailureSink` 
 
 ---
 
+## 17. Nettoyage des valeurs dans le texte libre, en complément de la rédaction par clé
+
+**Contexte** (GRO-1495, revue de businessfamily#183, 2026-09-17) : la décision 1
+laisse passer tout ce qui n'a pas de **nom de clé** : le **message** d'une
+exception, le corps de requête capturé comme **chaîne JSON**, `request.url`
+(`?token=…`), `query_string`, les cookies, les messages de breadcrumbs. Or c'est
+là que les données personnelles arrivent sans qu'aucun appelant les y mette.
+`DrizzleQueryError` vaut `Failed query: <sql>\nparams: <valeurs>` : on y trouve
+l'adresse, le token de magic-link en clair (`storeToken: "plain"`) et la clé de
+compteur `magic-link:<adresse>`. Le `detail` Postgres vaut
+`Key (email)=(…) already exists.`, et Prisma recopie ses arguments dans l'erreur.
+businessfamily a dû envelopper chaque `captureException` dans `toSentrySafeError` :
+c'est le correctif local qui a révélé le trou du package.
+
+**Décision** : `beforeSend`, `beforeSendTransaction` et `beforeSendLog` passent
+aussi chaque **chaîne** de l'événement par `scrubText` (`src/scrub.ts`), et
+`request.data` est traité selon sa forme (objet parcouru ; chaîne JSON parsée,
+rédigée par clé puis re-sérialisée ; sinon texte). Les motifs sont **ciblés** :
+`params:` des ORM, `Key (…)=(…)` Postgres, `clé: "valeur"` quand la clé est
+sensible, paramètres d'URL ou de formulaire sensibles, `Bearer`, identifiants
+dans une URL de connexion, préfixes de secrets connus (`sk_live_`, `npg_`,
+`whsec_`, JWT…) et adresses email. Seule la **valeur** est remplacée, par
+`[redacted]` en minuscules pour la distinguer de la rédaction par clé. Le SQL,
+le nom de la contrainte et le nom du paramètre restent.
+
+**Pourquoi ça ne renverse pas la décision 1** : la rédaction par clé reste la
+garantie primaire. Les objections de la décision 1 contre la regex restent
+vraies, et chacune a sa parade :
+- *Faux positifs* : pas de détection générique de « ce qui ressemble à un secret ».
+  Un nom **faible** (`code`, `key`, `sid`) n'est sensible que dans une URL et
+  pour une valeur d'au moins 8 caractères : `code=500`, `key=theme` et un
+  `code: "ERR_INVALID_ARG_TYPE"` en contexte survivent. `Bearer undefined` survit
+  aussi : c'est un diagnostic. Une liste de messages ordinaires est épinglée
+  octet pour octet par `scrub.test.ts`.
+- *Performance* : chaque motif est protégé par un `includes` sur un caractère
+  sans lequel il ne peut pas matcher, et tout quantificateur ouvert est borné.
+  Une chaîne adverse de 100 Ko reste linéaire, et un événement d'environ 40 Ko
+  se nettoie en quelques millisecondes (les deux sont épinglés par un test).
+- *Fuites invisibles* : `[redacted]` reste visible dans l'UI.
+
+**Fail-closed** : si le nettoyage lève une exception, on n'envoie **pas**
+l'événement brut (ce serait une fuite) et on ne le **jette pas** non plus (ce
+serait l'aveuglement que le package doit empêcher). On envoie un événement
+minimal : types d'exception, frames sans variables locales, métadonnées
+d'enveloppe et tag `pii_scrub_failed: "true"`.
+
+**Conséquences si renversé** : retirer un motif ou un appel rouvre une fuite qui
+ne se voit **nulle part**, puisque l'événement part normalement. Chaque appel
+et chaque motif est couvert par au moins un test qui échoue quand on le retire
+(tests de mutation lancés à la livraison).
+
+**Limites connues** (pas couvertes) : un token placé dans le **chemin** d'une URL
+(`/invite/<token>`), une valeur non quotée dans un dump
+(`phone: 33612345678`), une valeur numérique dans un JSON tronqué par le SDK, et
+les PII sans motif reconnaissable (nom, adresse postale) dans un message libre.
+Ces cas restent à la charge de l'appelant.
+
+---
+
 ## Comment ajouter une nouvelle décision
 
 Quand tu fais un choix non-évident lors d'un futur refactor :

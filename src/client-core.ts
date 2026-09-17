@@ -16,7 +16,7 @@
  */
 
 import * as Sentry from "@sentry/nextjs";
-import { createSentryBeforeSend } from "./before-send.js";
+import { createSentryBeforeSend, createSentryBeforeSendTransaction } from "./before-send.js";
 import { DEFAULT_DENY_URLS, DEFAULT_IGNORED_ERRORS } from "./ignored.js";
 import {
   SENTRY_BROWSER_TRACES_SAMPLE_RATE,
@@ -256,6 +256,7 @@ export function initClientCore({ options, replay, eagerReplay }: InitClientCoreP
       ...(replayEager && eagerReplay ? [eagerReplay(tuning)] : []),
     ],
     beforeSend: createSentryBeforeSend(app),
+    beforeSendTransaction: createSentryBeforeSendTransaction(),
   });
 
   if (replayEnabled && !replayEager && isEnabled) {

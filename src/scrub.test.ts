@@ -256,6 +256,51 @@ describe("scrubText — independent review findings", () => {
   });
 });
 
+describe("scrubText — second review round", () => {
+  it("keeps redacting flat params past escaped quotes and past 4 KB", () => {
+    const escaped = String.raw`{"msg":"Failed query: insert\nparams: jean,\"{\"phone\":\"0612345678\"}\",TOKENabc123"}`;
+    const out = scrubText(escaped);
+    expect(out).not.toContain("0612345678");
+    expect(out).not.toContain("TOKENabc123");
+    const bulk = `Failed query: insert into t values ($1) params: ${"a,".repeat(2_200)}TOKENtail123456`;
+    expect(scrubText(bulk)).toBe("Failed query: insert into t values ($1) params: [redacted]");
+  });
+
+  it("ends Postgres tuples inside JSON, before `SQL state`, after `=` or `(`", () => {
+    expect(scrubText('{"detail":"Failing row contains (1, Jean Dupont, 0612345678).","code":"23502"}')).toBe(
+      '{"detail":"Failing row contains ([redacted]).","code":"23502"}',
+    );
+    expect(scrubText("DETAIL: Failing row contains (1, Jean Dupont). SQL state: 23502")).toBe(
+      "DETAIL: Failing row contains ([redacted]). SQL state: 23502",
+    );
+    expect(scrubText("detail: Key (phone)=(0612345678). hint: x")).toBe("detail: Key (phone)=([redacted]). hint: x");
+    expect(scrubText("detail=Key (phone)=(0612345678) already exists.")).toBe("detail=Key (phone)=([redacted]) already exists.");
+    expect(scrubText("(Key (phone)=(0612345678) already exists.)")).toBe("(Key (phone)=([redacted]) already exists.)");
+  });
+
+  it("unwraps double URL-encoding and keeps the marker searchable", () => {
+    const out = scrubText("/login?redirect=%252Freset%253Ftoken%253DSECRET123&lang=fr");
+    expect(out).not.toContain("SECRET123");
+    expect(out).toContain("[redacted]");
+    expect(out.endsWith("&lang=fr")).toBe(true);
+  });
+
+  it("finds an e-mail inside a percent-encoded URL run longer than 64 characters", () => {
+    const out = scrubText("path https%3A%2F%2Fapp.example.com%2Fauth%2Fverify%3Fsomething%3Dx%26email%3Djean%40example.com");
+    expect(out).not.toContain("jean");
+  });
+
+  it("never declares a lookbehind or \\p{…} as a regex LITERAL (parse-time SyntaxError before Safari 16.4)", async () => {
+    const { readFileSync } = await import("node:fs");
+    for (const file of ["src/scrub.ts", "src/before-send.ts", "src/redaction.ts"]) {
+      const source = readFileSync(file, "utf8");
+      const literals = source.match(/(?:^|[=(,:;!&|?]\s*)\/(?![/*])(?:[^/\n\\[]|\\.|\[(?:[^\]\\\n]|\\.)*\])+\/[dgimsuvy]*/gm) ?? [];
+      const modern = literals.filter((l) => l.includes("(?<=") || l.includes("(?<!") || l.includes("\\p{"));
+      expect(modern, file).toEqual([]);
+    }
+  });
+});
+
 describe("isSecretName / isSecretParam", () => {
   it("keeps weak names URL-only: `code` as an object key or JSON field is a diagnostic", () => {
     expect(isSecretName("code")).toBe(false);
@@ -490,6 +535,27 @@ describe("createSentryBeforeSend — no PII leaves the process", () => {
     expect(out.exception!.values![0]!.mechanism).toEqual({ type: "generic", data: { url: "https://app/?token=[redacted]" } });
   });
 
+  it("scrubs fingerprint and IP span attributes; fail-closed keeps trace ids and only class-name types", () => {
+    expect(beforeSend({ fingerprint: ["{{ default }}", EMAIL] })!.fingerprint).toEqual(["{{ default }}", REDACTED_VALUE]);
+    const tx = createSentryBeforeSendTransaction<SentryEventLike & Record<string, unknown>>()({
+      spans: [{ data: { "http.request.header.x_forwarded_for": "81.1.2.3", "user.ip_address": "81.1.2.3", "http.method": "GET" } }],
+    });
+    expect(tx.spans![0]!.data).toEqual({ "http.request.header.x_forwarded_for": REDACTED, "user.ip_address": REDACTED, "http.method": "GET" });
+
+    const hostile: SentryEventLike & Record<string, unknown> = {
+      type: "transaction",
+      contexts: { trace: { trace_id: "t1", span_id: "s1", op: "http.server", data: { url: MAGIC_LINK_URL } } },
+      exception: { values: [{ type: `Error for ${EMAIL}` }] },
+    };
+    Object.defineProperty(hostile, "extra", { enumerable: true, get() { throw new Error("x"); } });
+    const out = beforeSend(hostile)!;
+    expect(out.tags).toEqual({ app: "test-app", [SCRUB_FAILED_TAG]: "true" });
+    expect(out.contexts).toEqual({ trace: { trace_id: "t1", span_id: "s1", parent_span_id: undefined, op: "http.server" } });
+    expect(out.exception!.values![0]!.type).toBe("Error");
+    expect(JSON.stringify(out)).not.toContain(EMAIL);
+    expect(JSON.stringify(out)).not.toContain(TOKEN);
+  });
+
   it("fails closed even when reading exception.values throws, and drops fingerprint", () => {
     const hostile: SentryEventLike & Record<string, unknown> = { event_id: "e1", fingerprint: [EMAIL] };
     Object.defineProperty(hostile, "exception", {
@@ -594,6 +660,14 @@ describe("createSentryBeforeSendLog", () => {
     expect(JSON.stringify(out)).not.toContain(EMAIL);
     expect(out.message).toContain('from "rate_limit"');
     expect(out.attributes.route).toBe("/api/auth");
+  });
+
+  it("redacts user.* attributes the SDK sets BEFORE the hook, keeps user.id", () => {
+    const out = beforeSendLog({
+      message: "x",
+      attributes: { "user.id": "u1", "user.name": "Jean Dupont", "user.email": EMAIL, "client.address": "81.1.2.3" },
+    }) as { attributes: Record<string, unknown> };
+    expect(out.attributes).toEqual({ "user.id": "u1", "user.name": REDACTED, "user.email": REDACTED, "client.address": REDACTED });
   });
 });
 

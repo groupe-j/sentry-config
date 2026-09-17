@@ -52,19 +52,32 @@ const ORM_PARAMS = /(^|\n)(params: )[\s\S]*?(?=\n[ \t]+at |$)/g;
  * `Invalid params: expected object` is never touched. Stops at a quote (end of
  * the enclosing JSON string) or a real newline.
  */
-const ORM_PARAMS_FLAT = /((?:\\n|[ \t])params: )[^\n"]{0,4096}/g;
+const ORM_PARAMS_FLAT = /((?:\\n|[ \t])params: )(?:[^\n"\\]|\\(?!n[ \t]+at )[\s\S])*/g;
+// ↑ Unbounded on purpose: once started it always consumes (no restart), so it
+// stays linear — and a bound would leave the tail of a bulk insert in clear
+// while the message LOOKS redacted. Escaped quotes (`\"`) do not stop it.
+
+/**
+ * A Postgres detail tuple ends at `)` followed by the end of the text, a
+ * newline (real or JSON-escaped), a quote, a space or a separator — the detail
+ * is often embedded in JSON (`"detail":"…"`) or followed by `SQL state: …`.
+ */
+const PG_TUPLE_END = String.raw`\)(?=\.?(?:$|\\n|[\n\s"',;}\]]))`;
 
 /**
  * Postgres constraint `detail`: `Key (email)=(jean@…) already exists.`,
- * `Key (lower(name::text))=(…)`, and both tuples of an exclusion violation
+ * `Key (lower((phone)::text))=(…)`, and both tuples of an exclusion violation
  * (`… conflicts with existing key (…)=(…).`). The terminator is a LOOKAHEAD so
- * the second `key (…)=(` stays available to the next match.
+ * the second `key (…)=(` stays available to the next match. Source string, not
+ * a literal: see {@link compileModernPatterns}.
  */
-const PG_KEY_DETAIL =
-  /(?<=^|[\s"'.:;,>\]]|\\n)(key \((?:[^()\n]|\((?:[^()\n]|\([^()\n]{0,64}\)){0,64}\)){1,128}\)=\()[^\n]{0,1024}?(?=\) (?:already exists|is not present in table|is still referenced from table|conflicts with existing key)|\)\.?(?:\\n|\n|$))/gi;
+const PG_KEY_DETAIL_SOURCE =
+  String.raw`(?<=^|[\s"'.:;,>\]=(\[]|\\n)(key \((?:[^()\n]|\((?:[^()\n]|\([^()\n]{0,64}\)){0,64}\)){1,128}\)=\()[^\n]{0,1024}?(?=\) (?:already exists|is not present in table|is still referenced from table|conflicts with existing key)|` +
+  PG_TUPLE_END +
+  ")";
 
 /** Postgres `Failing row contains (1, Jean Dupont, 0612345678).` — the whole row. */
-const PG_FAILING_ROW = /(\bFailing row contains \()[^\n]{0,2048}?(?=\)\.?(?:\\n|\n|$))/g;
+const PG_FAILING_ROW = new RegExp(String.raw`(\bFailing row contains \()[^\n]{0,4096}?(?=` + PG_TUPLE_END + ")", "g");
 
 /** `postgres://user:password@host`, `redis://:password@host` — keep scheme, user and host. */
 const URL_CREDENTIALS = /\b([a-z][a-z0-9+.-]{1,20}:\/\/[^\s:/@]{0,256}:)[^\s@/]{1,256}@/gi;
@@ -94,17 +107,41 @@ const BEARER_ALPHA = /\b(Bearer)(\s+)[A-Za-z]{20,4096}(?![A-Za-z0-9._~+/=-])/gi;
  * Credentials recognisable by their shape alone. The lookbehind refuses a start
  * glued to a token character, so `eyJ-eyJ-eyJ-…` is ONE start, not thousands.
  */
-const KNOWN_SECRETS =
-  /(?<![A-Za-z0-9_-])(?:(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{8,512}|whsec_[A-Za-z0-9+/=]{16,512}|npg_[A-Za-z0-9]{8,512}|re_[A-Za-z0-9]{8,64}_[A-Za-z0-9]{16,128}|sk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,512}|gh[pousr]_[A-Za-z0-9]{30,512}|github_pat_[A-Za-z0-9_]{30,512}|xox[abposr]-[A-Za-z0-9-]{10,512}|AKIA[0-9A-Z]{16}|bot\d{6,12}:[A-Za-z0-9_-]{30,64}|eyJ[A-Za-z0-9_-]{8,512}\.eyJ[A-Za-z0-9_-]{8,8192}\.[A-Za-z0-9_-]{8,2048})/g;
+const KNOWN_SECRETS_SOURCE = String.raw`(?<![A-Za-z0-9_-])(?:(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{8,512}|whsec_[A-Za-z0-9+/=]{16,512}|npg_[A-Za-z0-9]{8,512}|re_[A-Za-z0-9]{8,64}_[A-Za-z0-9]{16,128}|sk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,512}|gh[pousr]_[A-Za-z0-9]{30,512}|github_pat_[A-Za-z0-9_]{30,512}|xox[abposr]-[A-Za-z0-9-]{10,512}|AKIA[0-9A-Z]{16}|bot\d{6,12}:[A-Za-z0-9_-]{30,256}|eyJ[A-Za-z0-9_-]{8,512}\.eyJ[A-Za-z0-9_-]{8,65536}\.[A-Za-z0-9_-]{8,4096})`;
 
 /**
  * Email, raw or URL-encoded (`%40`), Unicode local part and domain. The
  * lookbehind anchors the match at the start of the local part (`jérôme.…` is
- * redacted whole, and a long run of word characters is one start). `git@host:`
- * is an SSH remote, not a mailbox.
+ * redacted whole, a long run of word characters is one start, and `git@host:`
+ * — an SSH remote — is not re-matched from its second letter). A start right
+ * after a percent-escape is allowed: in `…%26email%3Djean%40x.fr` the address
+ * begins after `%3D`.
  */
-const EMAIL =
-  /(?<![\p{L}\p{N}._%+-])(?!git@)[\p{L}\p{N}._%+-]{1,64}(?:@|%40)(?:[\p{L}\p{N}-]{1,63}\.){1,8}\p{L}{2,24}(?![\p{L}\p{N}-])/gu;
+const EMAIL_SOURCE = String.raw`(?<=^|[^\p{L}\p{N}._%+-]|%[0-9A-Fa-f]{2})(?!git@)[\p{L}\p{N}._%+-]{1,64}(?:@|%40)(?:[\p{L}\p{N}-]{1,63}\.){1,8}\p{L}{2,24}(?![\p{L}\p{N}-])`;
+
+interface ModernPatterns {
+  pgKeyDetail: RegExp;
+  knownSecrets: RegExp;
+  email: RegExp;
+}
+
+let modernPatterns: ModernPatterns | undefined;
+
+/**
+ * Lookbehind and `\p{…}` need Safari ≥ 16.4. As regex LITERALS, an older
+ * engine rejects them at PARSE time — a SyntaxError for the whole bundled
+ * chunk, which may hold app code, not just Sentry. Compiled lazily from source
+ * strings instead, the failure stays local: `scrubText` throws, and the hooks
+ * fail closed (the event still ships, minimal and tagged).
+ */
+function compileModernPatterns(): ModernPatterns {
+  modernPatterns ??= {
+    pgKeyDetail: new RegExp(PG_KEY_DETAIL_SOURCE, "gi"),
+    knownSecrets: new RegExp(KNOWN_SECRETS_SOURCE, "g"),
+    email: new RegExp(EMAIL_SOURCE, "gu"),
+  };
+  return modernPatterns;
+}
 
 // ─── Parameter names ───────────────────────────────────────────────────────
 
@@ -183,22 +220,37 @@ export function isSecretParam(name: string, value: string): boolean {
 // ─── Text ──────────────────────────────────────────────────────────────────
 
 /** A URL-encoded value is decoded and re-scanned at most this many times. */
-const MAX_DECODE_DEPTH = 2;
+const MAX_DECODE_DEPTH = 3;
+const ENCODED_MARKER = encodeURIComponent(REDACTED_VALUE);
 
 function scrubParamValue(lead: string, name: string, value: string, match: string, depth: number): string {
   if (isSecretParam(name, value)) return `${lead}${name}=${REDACTED_VALUE}`;
   // `?redirect=%2Freset%3Ftoken%3DSECRET` — the nested URL only shows its
   // parameters once decoded. Re-encode the scrubbed result so the outer URL
   // stays well-formed and the redirect path stays readable.
-  if (depth < MAX_DECODE_DEPTH && value.includes("%")) {
-    let decoded: string;
-    try {
-      decoded = decodeURIComponent(value);
-    } catch {
-      return match; // Not valid percent-encoding: nothing hidden behind it.
+  if (depth === 0 && value.includes("%")) {
+    // Decode as many layers as present (`%253D` → `%3D` → `=`), bounded, then
+    // scan once. Malformed percent-encoding stops the unwrapping: nothing
+    // decodable is hidden behind it.
+    let decoded = value;
+    for (let i = 0; i < MAX_DECODE_DEPTH && decoded.includes("%"); i++) {
+      let next: string;
+      try {
+        next = decodeURIComponent(decoded);
+      } catch {
+        break;
+      }
+      if (next === decoded) break;
+      decoded = next;
     }
-    const scrubbed = scrubTextAt(decoded, depth + 1);
-    if (scrubbed !== decoded) return `${lead}${name}=${encodeURIComponent(scrubbed)}`;
+    if (decoded !== value) {
+      const scrubbed = scrubTextAt(decoded, 1);
+      if (scrubbed !== decoded) {
+        // Re-encode once so the outer URL stays well-formed, but keep the
+        // marker literal: a search for `[redacted]` must find it.
+        return `${lead}${name}=${encodeURIComponent(scrubbed).split(ENCODED_MARKER).join(REDACTED_VALUE)}`;
+      }
+    }
   }
   return match;
 }
@@ -211,7 +263,8 @@ function scrubTextAt(text: string, depth: number): string {
     out = out.replace(ORM_PARAMS, `$1$2${REDACTED_VALUE}`);
     if (out.includes("Failed query")) out = out.replace(ORM_PARAMS_FLAT, `$1${REDACTED_VALUE}`);
   }
-  if (out.includes("ey (")) out = out.replace(PG_KEY_DETAIL, `$1${REDACTED_VALUE}`);
+  const modern = compileModernPatterns();
+  if (out.includes("ey (")) out = out.replace(modern.pgKeyDetail, `$1${REDACTED_VALUE}`);
   if (out.includes("Failing row contains (")) out = out.replace(PG_FAILING_ROW, `$1${REDACTED_VALUE}`);
   if (out.includes("://")) out = out.replace(URL_CREDENTIALS, `$1${REDACTED_VALUE}@`);
 
@@ -239,9 +292,9 @@ function scrubTextAt(text: string, depth: number): string {
     out = out.replace(AUTH_SCHEME, `$1$2${REDACTED_VALUE}`).replace(BEARER_ALPHA, `$1$2${REDACTED_VALUE}`);
   }
   if (out.includes("_") || out.includes("-") || out.includes("eyJ") || out.includes("AKIA") || out.includes("bot")) {
-    out = out.replace(KNOWN_SECRETS, REDACTED_VALUE);
+    out = out.replace(modern.knownSecrets, REDACTED_VALUE);
   }
-  if (out.includes("@") || out.includes("%40")) out = out.replace(EMAIL, REDACTED_VALUE);
+  if (out.includes("@") || out.includes("%40")) out = out.replace(modern.email, REDACTED_VALUE);
 
   return out;
 }
@@ -274,12 +327,24 @@ const CREDENTIAL_HEADER_KEYS = new Set([
   "x-sanity-webhook-signature",
 ]);
 
+/**
+ * Client-IP carriers: headers (proxies, Vercel, Cloudflare, Fastly) and the
+ * OpenTelemetry / Sentry attributes that copy them.
+ */
+export const IP_KEY =
+  /^(?:x-(?:original-)?forwarded-for|x-real-ip|forwarded|cf-connecting-ip|true-client-ip|x-client-ip|x-cluster-client-ip|fastly-client-ip|x-vercel-forwarded-for|x-vercel-proxied-for|x-vercel-ip-.+|cf-ipcity|cf-iplatitude|cf-iplongitude|client\.address|user\.ip_address|ip_address)$/i;
+
 function isCredentialKey(key: string): boolean {
   if (isSensitive(key)) return true;
   const lower = key.toLowerCase();
-  if (CREDENTIAL_HEADER_KEYS.has(lower)) return true;
+  if (CREDENTIAL_HEADER_KEYS.has(lower) || IP_KEY.test(lower)) return true;
+  // Log / span attributes: `user.email`, `user.name`, `user.username` (only
+  // `user.id` is not personal data by itself).
+  if (lower.startsWith("user.") && lower !== "user.id") return true;
   const header = lower.lastIndexOf(".header.");
-  return header !== -1 && CREDENTIAL_HEADER_KEYS.has(lower.slice(header + ".header.".length));
+  if (header === -1) return false;
+  const name = lower.slice(header + ".header.".length).replace(/_/g, "-");
+  return CREDENTIAL_HEADER_KEYS.has(name) || IP_KEY.test(name);
 }
 
 /** Beyond this depth the value is replaced — a parsed request body is attacker-shaped. */

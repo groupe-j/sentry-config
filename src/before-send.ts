@@ -8,6 +8,7 @@
 
 import { REDACTED, scrubHeaders } from "./redaction.js";
 import {
+  IP_KEY,
   REDACTED_VALUE,
   scrubCookies,
   scrubDeep,
@@ -34,6 +35,7 @@ interface StackFrameLike {
 // independent from @sentry/* (consumer apps depend on @sentry/nextjs).
 export interface SentryEventLike {
   message?: string;
+  fingerprint?: string[];
   logentry?: { message?: string; params?: unknown[] };
   transaction?: string;
   tags?: Record<string, unknown>;
@@ -107,14 +109,11 @@ function scrubFrame(f: StackFrameLike, seen: WeakSet<object>): StackFrameLike {
   return next;
 }
 
-/** Client IP and IP-derived geolocation headers (proxies, Vercel, Cloudflare). */
-const IP_HEADER = /^(?:x-forwarded-for|x-real-ip|forwarded|cf-connecting-ip|true-client-ip|x-client-ip|x-vercel-forwarded-for|x-vercel-proxied-for|x-vercel-ip-.+|cf-ipcity|cf-iplatitude|cf-iplongitude)$/i;
-
 /** Header NAMES that are credentials are dropped by `scrubHeaders`; the rest have their VALUES scanned (`Referer: …?token=`). */
 function scrubHeaderValues(headers: Record<string, string>): Record<string, string> {
   const result: Record<string, string> = {};
   for (const [k, v] of Object.entries(scrubHeaders(headers))) {
-    result[k] = IP_HEADER.test(k) ? REDACTED : typeof v === "string" ? scrubText(v) : v;
+    result[k] = IP_KEY.test(k) ? REDACTED : typeof v === "string" ? scrubText(v) : v;
   }
   return result;
 }
@@ -150,6 +149,9 @@ function scrubEvent<E extends SentryEventLike>(event: E): E {
     };
   }
   if (typeof event.transaction === "string") next.transaction = scrubText(event.transaction);
+  if (Array.isArray(event.fingerprint)) {
+    next.fingerprint = event.fingerprint.map((f) => (typeof f === "string" ? scrubText(f) : f));
+  }
   if (event.tags) next.tags = scrubTags(event.tags);
 
   if (event.request) {
@@ -226,13 +228,26 @@ function failClosed<E extends SentryEventLike>(event: E, appName?: string): E {
   }
   try {
     const values = event.exception?.values?.map((v) => ({
-      type: typeof v.type === "string" ? v.type : undefined,
+      // A class name is kept; anything else (`Error for jean@…`) is not.
+      type: typeof v.type === "string" && /^[\w$.]{1,128}$/.test(v.type) ? v.type : "Error",
       value: REDACTED_VALUE,
       stacktrace: v.stacktrace?.frames ? { frames: v.stacktrace.frames.map(safeFrame) } : undefined,
     }));
     if (values) result.exception = { values };
   } catch {
     result.exception = { values: [{ type: "Error", value: REDACTED_VALUE }] };
+  }
+  try {
+    // Trace ids only: a transaction without them is rejected server-side, and
+    // the failure would be invisible.
+    const trace = (event as { contexts?: { trace?: Record<string, unknown> } }).contexts?.trace;
+    if (trace) {
+      result.contexts = {
+        trace: { trace_id: trace.trace_id, span_id: trace.span_id, parent_span_id: trace.parent_span_id, op: trace.op },
+      };
+    }
+  } catch {
+    // Unreadable trace context: ship without it.
   }
   result.message = REDACTED_VALUE;
   result.tags = { ...(appName ? { app: appName } : {}), [SCRUB_FAILED_TAG]: "true" };

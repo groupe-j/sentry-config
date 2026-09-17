@@ -257,6 +257,36 @@ describe("scrubText — independent review findings", () => {
   });
 });
 
+describe("scrubText — clés françaises", () => {
+  it("redacts French form keys in a JSON body, accented keys included, and keeps look-alikes", () => {
+    const body = '{"prénom":"Jean","nom":"Dupont","code_postal":"57000","téléphone":"0612345678","nombre":"3","nomenclature":"NAF 71.11Z"}';
+    expect(scrubText(`POST /api/leads ${body}`)).toBe(
+      'POST /api/leads {"prénom":"[redacted]","nom":"[redacted]","code_postal":"[redacted]","téléphone":"[redacted]","nombre":"3","nomenclature":"NAF 71.11Z"}',
+    );
+  });
+
+  it("keeps the broad French keys (`nom`, `ville`, `commune`) in SQL, like `name` and `city`", () => {
+    const sql = `SELECT * FROM "produit" WHERE "nom" = 'Chaise' AND "ville" = 'Metz' AND "commune" = 'Metz' ORDER BY "nom" ASC`;
+    expect(scrubText(sql)).toBe(sql);
+    // Same deliberate blind spot as `name`: a quoted `=` pair (logfmt) is kept…
+    expect(scrubText('nom="Jean Dupont" action=signup')).toBe('nom="Jean Dupont" action=signup');
+    expect(scrubText('name="Jean Dupont" action=signup')).toBe('name="Jean Dupont" action=signup');
+    // …while a non-broad key in the same shape is not, so the rule above is what keeps them.
+    expect(scrubText(`WHERE "prenom" = 'Chaise'`)).toBe(`WHERE "prenom" = '[redacted]'`);
+    // Unquoted (URL, form) stays redacted.
+    expect(scrubText("?nom=Dupont&ville=Metz")).toBe("?nom=[redacted]&ville=[redacted]");
+  });
+
+  it("redacts them in an ORM dump and a form body", () => {
+    expect(scrubText('data: { nom: "Dupont", ville: "Metz", siret: "12345678900012", nombre: "3" }')).toBe(
+      'data: { nom: "[redacted]", ville: "[redacted]", siret: "[redacted]", nombre: "3" }',
+    );
+    expect(scrubText("nom=Dupont&prenom=Jean&commune=Metz&nombre=3")).toBe(
+      "nom=[redacted]&prenom=[redacted]&commune=[redacted]&nombre=3",
+    );
+  });
+});
+
 describe("scrubText — second review round", () => {
   it("keeps redacting flat params past escaped quotes and past 4 KB", () => {
     const escaped = String.raw`{"msg":"Failed query: insert\nparams: jean,\"{\"phone\":\"0612345678\"}\",TOKENabc123"}`;

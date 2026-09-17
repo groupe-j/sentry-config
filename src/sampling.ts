@@ -89,14 +89,21 @@ export const SENTRY_BROWSER_TRACES_SAMPLE_RATE = parseRate(
  * `SENTRY_ENVIRONMENT` is the server-side var. The browser bundle only sees
  * `NEXT_PUBLIC_*` vars (Next.js inlines those at build time and drops
  * non-public ones), so client consumers set `NEXT_PUBLIC_SENTRY_ENVIRONMENT`.
- * Both fall through to `VERCEL_ENV` (prod/preview) and `NODE_ENV` (local/test)
- * when unset, so dev/preview/prod behaviour is unchanged unless an app opts in
+ * Both fall through to `VERCEL_ENV` (prod/preview; `NEXT_PUBLIC_VERCEL_ENV` in
+ * the browser bundle) and `NODE_ENV` (local/test) when unset, so
+ * dev/preview/prod behaviour is unchanged unless an app opts in
  * — e.g. a CI e2e run booting under `next start` that wants `environment: "ci"`.
  */
 export const SENTRY_ENVIRONMENT =
   process.env.SENTRY_ENVIRONMENT ??
   process.env.NEXT_PUBLIC_SENTRY_ENVIRONMENT ??
   process.env.VERCEL_ENV ??
+  // Browser bundle: `VERCEL_ENV` is not a `NEXT_PUBLIC_*` var, so it is absent
+  // there, while `NODE_ENV` is "production" for every `next build` — previews
+  // included. Vercel exposes the same value to Next.js builds as
+  // `NEXT_PUBLIC_VERCEL_ENV`. Read AFTER `VERCEL_ENV`, so the server
+  // resolution is unchanged.
+  process.env.NEXT_PUBLIC_VERCEL_ENV ??
   process.env.NODE_ENV ??
   "development";
 

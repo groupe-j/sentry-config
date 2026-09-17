@@ -7,7 +7,8 @@
  *
  * Why whole-word + normalization (not substring): substring would over-redact
  * `ipAddress`, `requestToken`, etc. Normalisation handles `id_card` ≡ `idCard`
- * ≡ `id-card` (all become `idcard` → match). Exact-key matching means broad
+ * ≡ `id-card` (all become `idcard` → match), and folds accents and spaces
+ * (`Prénom` ≡ `prenom`, `Code Postal` ≡ `codepostal`). Exact-key matching means broad
  * entries stay narrow: `name` redacts a key literally named `name`, never
  * `filename` / `hostname` / `username` / `appName`.
  *
@@ -47,6 +48,21 @@ const SENSITIVE_KEYS = new Set([
   "birthdate",
   "birthday",
   "ip",
+
+  // French form fields (lead, subscription and dossier forms of the portfolio).
+  // Matched after folding case, accents and separators, like every key here:
+  // `Prénom` ≡ `prenom`, `Code Postal` ≡ `code_postal` ≡ `codePostal`. Exact
+  // match, so `nombre` / `nomenclature` never hit `nom`.
+  "nom",
+  "prenom",
+  "tel",
+  "portable",
+  "adresse",
+  "commune",
+  "ville",
+  "codepostal",
+  "raisonsociale",
+  "siret",
 
   // Lead / contact free-text (leads schema across portfolio apps —
   // `name`/`location`/`description` carry a person's identity, home town,
@@ -99,9 +115,22 @@ const SENSITIVE_KEYS = new Set([
 
 export const REDACTED = "[REDACTED]";
 
+/**
+ * Case, accents and word separators folded away: `Prénom` → `prenom`,
+ * `code_postal` / `Code Postal` / `code-postal` → `codepostal`.
+ */
+export function foldKey(key: string): string {
+  let folded = key.toLowerCase();
+  // `redact` runs this on every key of every event: pay for Unicode
+  // normalisation only when the key is not plain ASCII.
+  if (/[\u0080-\uffff]/.test(folded)) {
+    folded = folded.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  }
+  return folded.replace(/[\s_-]/g, "");
+}
+
 export function isSensitive(key: string): boolean {
-  const normalised = key.toLowerCase().replace(/[_-]/g, "");
-  return SENSITIVE_KEYS.has(normalised);
+  return SENSITIVE_KEYS.has(foldKey(key));
 }
 
 export function redact(value: unknown, seen = new WeakSet<object>()): unknown {

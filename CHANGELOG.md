@@ -3,6 +3,47 @@
 All notable changes to `@groupe-j/sentry-config` are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [1.3.2] - 2026-09-17
+
+### Fixed
+
+- **Environnement des erreurs navigateur** : `SENTRY_ENVIRONMENT` lit aussi
+  `NEXT_PUBLIC_VERCEL_ENV`. `VERCEL_ENV` n'est pas une variable
+  `NEXT_PUBLIC_*` : elle est absente du bundle client, où `NODE_ENV` vaut
+  `production` pour tout `next build`. Les erreurs navigateur d'une **preview**
+  partaient donc étiquetées `production` dans toute app sur `initSentryClient`.
+  Ordre : `SENTRY_ENVIRONMENT` → `NEXT_PUBLIC_SENTRY_ENVIRONMENT` →
+  `VERCEL_ENV` → `NEXT_PUBLIC_VERCEL_ENV` → `NODE_ENV`. `NEXT_PUBLIC_VERCEL_ENV`
+  est lu **après** `VERCEL_ENV` : la résolution côté serveur ne change pas.
+  Vercel expose `NEXT_PUBLIC_VERCEL_ENV` aux builds Next.js tant que les
+  variables système sont exposées (réglage par défaut du projet). Le
+  contournement applicatif (`env: { NEXT_PUBLIC_SENTRY_ENVIRONMENT: … }` dans
+  `next.config`) devient inutile, sans être nuisible.
+
+- **Clés françaises des formulaires** ajoutées à la rédaction par nom de clé
+  (et donc au nettoyage des bodies JSON, dumps ORM et formulaires) : `nom`,
+  `prenom`, `adresse`, `commune`, `ville`, `codepostal`, `tel`, `portable`,
+  `raisonsociale`, `siret` (`telephone` y était déjà).
+  La normalisation des clés replie désormais aussi les **accents** et les
+  **espaces**, en plus de la casse, `_` et `-` : `Prénom`, `téléphone`,
+  `Code Postal` et `raison_sociale` correspondent. Le motif texte
+  `"clé": "valeur"` accepte les clés accentuées (`"prénom": "Jean"`), mais
+  pas les clés contenant un espace : `{"Code Postal": "57000"}` est rédigé
+  comme objet (body parsé, `extra`, `contexts`), pas dans une chaîne (message,
+  body tronqué).
+  Correspondance exacte après repli, jamais par sous-chaîne : `nombre`,
+  `nomenclature`, `nomFichier`, `dénomination`, `communication` restent en
+  clair (épinglé par test).
+  Comme pour `name` et `city`, une valeur **entre guillemets** de `nom`,
+  `ville` ou `commune` n'est rédigée dans du texte qu'avec le séparateur `:` :
+  `"nom" = 'Chaise'` en SQL reste lisible, et `nom="Jean"` en logfmt aussi
+  (même angle mort, choisi, que `name`). `nom=Dupont` (URL, formulaire) est
+  toujours rédigé. Épinglé par test.
+
+  Patch : plus de rédaction, aucune API retirée, aucun taux modifié. Coût
+  pour une clé ASCII inchangé (la normalisation Unicode ne s'exécute que sur
+  une clé non ASCII).
+
 ## [1.3.1] - 2026-09-17
 
 ### Fixed

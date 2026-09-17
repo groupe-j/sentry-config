@@ -217,3 +217,41 @@ describe("SENTRY_BROWSER_TRACES_SAMPLE_RATE", () => {
     }
   });
 });
+
+describe("SENTRY_ENVIRONMENT", () => {
+  // The CI runner or the shell may carry any of these: start from a clean slate.
+  const VARS = ["SENTRY_ENVIRONMENT", "NEXT_PUBLIC_SENTRY_ENVIRONMENT", "VERCEL_ENV", "NEXT_PUBLIC_VERCEL_ENV"] as const;
+
+  async function environmentWith(env: Partial<Record<(typeof VARS)[number] | "NODE_ENV", string>>): Promise<string> {
+    vi.resetModules();
+    for (const name of VARS) vi.stubEnv(name, undefined);
+    for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value);
+    return (await import("./sampling.js")).SENTRY_ENVIRONMENT;
+  }
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it("reads NEXT_PUBLIC_VERCEL_ENV in the browser, where VERCEL_ENV is not inlined — a preview is not production", async () => {
+    // Browser bundle of a preview deployment: only NEXT_PUBLIC_* survive, and
+    // NODE_ENV is "production" for any `next build`.
+    expect(await environmentWith({ NODE_ENV: "production", NEXT_PUBLIC_VERCEL_ENV: "preview" })).toBe("preview");
+  });
+
+  it("keeps the server resolution unchanged: VERCEL_ENV wins over NEXT_PUBLIC_VERCEL_ENV", async () => {
+    expect(
+      await environmentWith({ NODE_ENV: "production", VERCEL_ENV: "production", NEXT_PUBLIC_VERCEL_ENV: "preview" }),
+    ).toBe("production");
+  });
+
+  it("lets an explicit override win on both sides", async () => {
+    expect(await environmentWith({ SENTRY_ENVIRONMENT: "ci", VERCEL_ENV: "preview" })).toBe("ci");
+    expect(await environmentWith({ NEXT_PUBLIC_SENTRY_ENVIRONMENT: "ci", NEXT_PUBLIC_VERCEL_ENV: "preview" })).toBe("ci");
+  });
+
+  it("falls back to NODE_ENV when no Vercel variable is present", async () => {
+    expect(await environmentWith({ NODE_ENV: "production" })).toBe("production");
+  });
+});

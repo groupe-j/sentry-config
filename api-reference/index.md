@@ -659,7 +659,7 @@ Extend per-app via `ignoreErrors: [...DEFAULT_IGNORED_ERRORS, ...yourCustom]`.
 
 > `const` **REDACTED**: `"[REDACTED]"` = `"[REDACTED]"`
 
-Defined in: [redaction.ts:100](https://github.com/groupe-j/sentry-config/blob/main/src/redaction.ts#L100)
+Defined in: [redaction.ts:116](https://github.com/groupe-j/sentry-config/blob/main/src/redaction.ts#L116)
 
 ***
 
@@ -761,15 +761,16 @@ Defined in: [sampling.ts:20](https://github.com/groupe-j/sentry-config/blob/main
 
 > `const` **SENTRY\_ENVIRONMENT**: `string`
 
-Defined in: [sampling.ts:96](https://github.com/groupe-j/sentry-config/blob/main/src/sampling.ts#L96)
+Defined in: [sampling.ts:97](https://github.com/groupe-j/sentry-config/blob/main/src/sampling.ts#L97)
 
 Explicit override wins over the Vercel/Node defaults.
 
 `SENTRY_ENVIRONMENT` is the server-side var. The browser bundle only sees
 `NEXT_PUBLIC_*` vars (Next.js inlines those at build time and drops
 non-public ones), so client consumers set `NEXT_PUBLIC_SENTRY_ENVIRONMENT`.
-Both fall through to `VERCEL_ENV` (prod/preview) and `NODE_ENV` (local/test)
-when unset, so dev/preview/prod behaviour is unchanged unless an app opts in
+Both fall through to `VERCEL_ENV` (prod/preview; `NEXT_PUBLIC_VERCEL_ENV` in
+the browser bundle) and `NODE_ENV` (local/test) when unset, so
+dev/preview/prod behaviour is unchanged unless an app opts in
 — e.g. a CI e2e run booting under `next start` that wants `environment: "ci"`.
 
 ***
@@ -823,7 +824,7 @@ two orders of magnitude in volume and 10% is calibrated for the loud one.
 
 > `const` **SENTRY\_WEBVITAL\_SAMPLE\_RATE**: `number`
 
-Defined in: [sampling.ts:117](https://github.com/groupe-j/sentry-config/blob/main/src/sampling.ts#L117)
+Defined in: [sampling.ts:124](https://github.com/groupe-j/sentry-config/blob/main/src/sampling.ts#L124)
 
 Web-vital sample rate — INP & friends.
 
@@ -962,7 +963,7 @@ Everything else is forwarded untouched. The return type is exactly what
 
 > **createTracesSampler**(`defaultRate?`, `webVitalRate?`): (`ctx`) => `number`
 
-Defined in: [sampling.ts:211](https://github.com/groupe-j/sentry-config/blob/main/src/sampling.ts#L211)
+Defined in: [sampling.ts:218](https://github.com/groupe-j/sentry-config/blob/main/src/sampling.ts#L218)
 
 Builds a `tracesSampler` that returns 0 for low-value routes.
 Pass to `Sentry.init({ tracesSampler: createTracesSampler(0.1) })`.
@@ -1089,7 +1090,7 @@ or a JSON field, `code: "ERR_INVALID_ARG_TYPE"` is a diagnostic.
 
 > **isSensitive**(`key`): `boolean`
 
-Defined in: [redaction.ts:102](https://github.com/groupe-j/sentry-config/blob/main/src/redaction.ts#L102)
+Defined in: [redaction.ts:132](https://github.com/groupe-j/sentry-config/blob/main/src/redaction.ts#L132)
 
 #### Parameters
 
@@ -1107,7 +1108,7 @@ Defined in: [redaction.ts:102](https://github.com/groupe-j/sentry-config/blob/ma
 
 > **redact**(`value`, `seen?`): `unknown`
 
-Defined in: [redaction.ts:107](https://github.com/groupe-j/sentry-config/blob/main/src/redaction.ts#L107)
+Defined in: [redaction.ts:136](https://github.com/groupe-j/sentry-config/blob/main/src/redaction.ts#L136)
 
 #### Parameters
 
@@ -1179,7 +1180,7 @@ Key-name redaction AND value scrubbing, recursively. Returns new containers
 
 > **scrubHeaders**(`headers`): `Record`\<`string`, `string`\>
 
-Defined in: [redaction.ts:148](https://github.com/groupe-j/sentry-config/blob/main/src/redaction.ts#L148)
+Defined in: [redaction.ts:177](https://github.com/groupe-j/sentry-config/blob/main/src/redaction.ts#L177)
 
 #### Parameters
 

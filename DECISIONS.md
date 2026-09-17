@@ -482,7 +482,7 @@ ouverts restants sont ceux listés ici.
 
 ---
 
-## 18. Le `name` des contexts SDK (`runtime`, `os`, `browser`) n'est pas rédigé par clé
+## 18. `runtime.name` / `os.name` écrits par le SDK ne sont pas rédigés — liste de VALEURS
 
 **Contexte** (GRO-1505, revue de ridesamui-t3#801, 2026-09-17) : 0.6.1 a ajouté
 `name` aux clés sensibles (M5, leads) en acceptant un coût documenté :
@@ -493,38 +493,62 @@ depuis 1.3.0. Résultat : `runtime.name` et `os.name` vides sur toutes les issue
 et plus moyen de séparer Node d'edge.
 
 **Décision** : `scrubContexts` (`src/scrub.ts`) applique `scrubDeep` à
-`event.contexts`, sauf pour **un** champ : le `name` **chaîne** de
-`contexts.runtime`, `contexts.os` et `contexts.browser`, qui passe par
-`scrubText` (nettoyage des valeurs) au lieu de la rédaction par clé.
+`event.contexts`, sauf pour **un** champ : `contexts.runtime.name` et
+`contexts.os.name` sont conservés quand leur valeur **exacte** figure dans
+`SDK_CONTEXT_NAMES`, c'est-à-dire les valeurs qu'écrit le SDK. Toute autre valeur
+est rédigée par clé, comme avant.
 
-**Pourquoi cette liste et pas plus** — relevé dans le SDK (10.70), pas supposé :
-- `runtime.name` : `@sentry/node-core` (`{ name: "node", version }`) et
-  `@sentry/vercel-edge` (`{ name: "vercel-edge" }`).
-- `os.name` : intégration context de Node (`Linux`, `Windows`, `Mac OS X`, distro).
-- `browser.name` : le SDK navigateur n'écrit ni `browser`, ni `os`, ni `device`.
-  Relay les dérive du User-Agent **après** `beforeSend`. L'exemption ne sert qu'à
-  une app qui le poserait, et un nom de navigateur n'est jamais personnel.
-- **`device` exclu** : Node n'y écrit pas de `name`, le navigateur non plus.
-  Sur les SDK natifs, `device.name` est le nom donné par le propriétaire
-  (« iPhone de Jean Dupont »), que Sentry traite lui-même comme PII. Aucun gain
-  sur ce portefeuille, et un trou latent.
-- **`app`, `culture`, `cloud_resource`, `trace` exclus** : le SDK n'y écrit aucun
-  `name` (`spanToTraceContext` : ids, `op`, `data`, `status`, `origin`). Les
-  exempter ne laisserait passer que le `name` d'une app.
+**Pourquoi une liste de valeurs et pas une exemption par context** : la première
+version exemptait le `name` chaîne de `runtime` / `os` / `browser` et le passait
+par `scrubText`. La revue indépendante l'a cassée sur le code du SDK : l'intégration
+context de Node fusionne l'app **par-dessus** le SDK
+(`os: { ...sdkOs, ...event.contexts?.os }`), et le client prend
+`event.contexts?.runtime` avant le sien. `Sentry.setContext("os", { name: lead.name })`
+ou un indice `captureException(err, { contexts: { runtime: … } })` écrit donc
+dans le champ exempté, et `scrubText` ne reconnaît pas un nom nu. La clé du
+context dit où le SDK écrit d'habitude, pas **qui** a écrit. La valeur, elle, le
+dit.
+
+**Pourquoi ces valeurs** — relevées dans le SDK 10.70, pas supposées :
+- `runtime` : `node` (`@sentry/node-core`), `vercel-edge` (`@sentry/vercel-edge`),
+  `cloudflare` (`@sentry/cloudflare`) ;
+- `os` : `PLATFORM_NAMES` (`Windows`, `Android`, `FreeBSD`…), `Linux`, les
+  distributions de `LINUX_DISTROS` (`Ubuntu Linux`, `Alpine Linux`…), `Mac OS X`
+  et `macOS` (`sw_vers`).
+
+**Contexts exclus** :
+- **`browser`, `device`** : aucun SDK JS ne les écrit avant `beforeSend`. Relay
+  les dérive du User-Agent **après**, donc le tag `browser.name` n'est pas
+  touché. Sur les SDK natifs, `device.name` est le nom donné par le propriétaire
+  (« iPhone de Jean Dupont »), que Sentry traite lui-même comme PII ;
+- **`app`, `culture`, `cloud_resource`, `trace`** : le SDK n'y écrit aucun `name`
+  (`spanToTraceContext` : ids, `op`, `data`, `status`, `origin`).
+
+**Échec visible, pas de fuite** : une valeur que le SDK écrirait sans figurer
+dans la liste (nouvelle distribution, SDK plus récent) reste `[REDACTED]`, exactement
+comme avant ce correctif (voir décision 4). `src/sdk-contexts.test.ts` fait
+tourner le **vrai** SDK serveur (`initSentryServer`, transport capturant) et
+exige `runtime.name` et `os.name` lisibles sur l'OS de la CI : une dérive au
+prochain bump de `@sentry/nextjs` passe au rouge ici au lieu d'aveugler le
+triage en prod. Pour l'ajout, lire la valeur dans le code du SDK, puis l'ajouter
+à la liste.
 
 **Ce qui reste rédigé** : `name` partout ailleurs (`extra`, `request.data`,
-breadcrumbs, contexts applicatifs), un `name` imbriqué dans un context SDK, un
-`name` non chaîne, et toutes les autres clés sensibles de ces contexts. La
-valeur exemptée passe quand même par `scrubText` : `runtime.name` contenant un
-email ou `?token=` est nettoyé. `redact()` (export public) garde la rédaction
-par clé sans exception : l'exemption vit dans les hooks d'événement.
+breadcrumbs, contexts applicatifs), un `name` imbriqué dans `runtime` / `os`, un
+`name` non chaîne, une valeur SDK dans le mauvais context (`runtime.name: "Linux"`),
+et toutes les autres clés sensibles de ces contexts. `redact()` (export public)
+garde la rédaction par clé sans exception : l'exemption vit dans les hooks
+d'événement. La table est une `Map` : une clé de context `constructor` ou
+`__proto__` ne résout rien.
 
 **Conséquences si renversé** : (a) retirer l'exemption rend de nouveau
-`runtime.name` / `os.name` vides, sans que rien ne casse ; (b) l'élargir (context
-entier, `device`, n'importe quel champ, profondeur quelconque) laisse partir un
-`name` de lead posé dans un context au nom réservé. Les deux sens sont épinglés
-par `redaction.test.ts`, avec 14 mutants tués à la livraison, et vérifiés de
-bout en bout avec le vrai SDK serveur (erreur + transaction).
+`runtime.name` / `os.name` vides, sans que rien ne casse ; (b) revenir à une
+exemption par context, même avec `scrubText` sur la valeur, laisse partir un nom
+de lead écrit par `setContext("os", …)` ; (c) élargir la correspondance (casse,
+préfixe, liste partagée entre contexts, `browser` / `device`) rouvre le même
+trou par un autre côté. Tout est épinglé par `redaction.test.ts` et
+`sdk-contexts.test.ts` : 17 mutants tués à la livraison, et le test du vrai SDK
+échoue sur le code d'avant.
 
 ---
 

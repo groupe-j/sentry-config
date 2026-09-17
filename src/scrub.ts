@@ -379,23 +379,60 @@ function scrubEntry(key: string, v: unknown, seen: WeakSet<object>, depth: numbe
 }
 
 /**
- * Contexts whose `name` the Sentry SDK writes as product metadata:
- * `runtime.name` (`node`, `vercel-edge`), `os.name` (`Linux`, `Windows`) and
- * `browser.name`. Redacting it by key empties the `runtime.name` / `os.name`
- * tags, and triage can no longer split Node from edge issues.
+ * The `name` values the Sentry SDK writes as product metadata in
+ * `contexts.runtime` and `contexts.os` — read from the SDK source (10.70), not
+ * guessed: `runtime` from the `@sentry/node-core`, `@sentry/vercel-edge` and
+ * `@sentry/cloudflare` clients; `os` from the node-core context integration
+ * (`PLATFORM_NAMES`, `LINUX_DISTROS`, `sw_vers` on macOS). Redacting them by key
+ * empties the `runtime.name` / `os.name` tags, and triage can no longer split
+ * Node from edge issues.
  *
- * Deliberately NOT here:
- *  - `device` — on native SDKs `device.name` is the owner-given name
- *    ("iPhone de Jean Dupont"); the JS SDKs never write it.
- *  - `app`, `culture`, `cloud_resource`, `trace` — the SDK writes no `name`
- *    there, so an exemption would only let an app's own `name` through.
+ * An allowlist of VALUES, not of context keys: the SDK merges app data over
+ * its own (`os: { ...sdkOs, ...event.contexts?.os }`), so
+ * `setContext("os", { name: lead.name })` lands in the very same field, and a
+ * bare name has no shape `scrubText` could catch. An SDK value missing from the
+ * list is redacted as before — visible, never a leak; `sdk-contexts.test.ts`
+ * runs the real SDK to catch that drift.
+ *
+ * Deliberately absent:
+ *  - `browser` / `device` — no JS SDK writes them before `beforeSend` (Relay
+ *    derives them from the User-Agent afterwards), and on native SDKs
+ *    `device.name` is the owner-given name ("iPhone de Jean Dupont");
+ *  - `app`, `culture`, `cloud_resource`, `trace` — the SDK writes no `name` there.
  */
-const SDK_NAMED_CONTEXTS = new Set(["runtime", "os", "browser"]);
+const SDK_CONTEXT_NAMES = new Map<string, ReadonlySet<string>>([
+  ["runtime", new Set(["node", "vercel-edge", "cloudflare"])],
+  [
+    "os",
+    new Set([
+      "Linux",
+      "Windows",
+      "macOS",
+      "Mac OS X",
+      "Android",
+      "FreeBSD",
+      "OpenBSD",
+      "SunOS",
+      "IBM AIX",
+      "OpenHarmony",
+      "Alpine Linux",
+      "Arch Linux",
+      "Centos",
+      "Debian",
+      "Fedora",
+      "Gentoo Linux",
+      "Red Hat Linux",
+      "SUSE Linux",
+      "Ubuntu Linux",
+    ]),
+  ],
+]);
 
 /**
- * `event.contexts`: {@link scrubDeep}, except that the string `name` of an
- * SDK-named context is value-scrubbed instead of redacted by key. Every other
- * key of those contexts, nested objects included, keeps the key-name rule.
+ * `event.contexts`: {@link scrubDeep}, except that `runtime.name` / `os.name`
+ * survive when their value is one the SDK writes ({@link SDK_CONTEXT_NAMES}).
+ * Any other value, and every other key of those contexts, keeps the key-name
+ * rule.
  */
 export function scrubContexts(contexts: unknown, seen = new WeakSet<object>()): unknown {
   if (!isPlainObject(contexts) || seen.has(contexts)) return scrubDeep(contexts, seen);
@@ -403,14 +440,15 @@ export function scrubContexts(contexts: unknown, seen = new WeakSet<object>()): 
 
   const result: Record<string, unknown> = {};
   for (const [key, ctx] of Object.entries(contexts)) {
-    if (!SDK_NAMED_CONTEXTS.has(key) || !isPlainObject(ctx) || seen.has(ctx)) {
+    const sdkNames = SDK_CONTEXT_NAMES.get(key);
+    if (!sdkNames || !isPlainObject(ctx) || seen.has(ctx)) {
       result[key] = scrubEntry(key, ctx, seen, 0);
       continue;
     }
     seen.add(ctx);
     const scrubbed: Record<string, unknown> = {};
     for (const [field, v] of Object.entries(ctx)) {
-      scrubbed[field] = field === "name" && typeof v === "string" ? scrubText(v) : scrubEntry(field, v, seen, 1);
+      scrubbed[field] = field === "name" && typeof v === "string" && sdkNames.has(v) ? v : scrubEntry(field, v, seen, 1);
     }
     result[key] = scrubbed;
   }

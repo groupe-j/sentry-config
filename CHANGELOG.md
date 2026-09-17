@@ -18,20 +18,32 @@ This project follows [Semantic Versioning](https://semver.org/).
   (`@sentry/nextjs` 10.70, `initSentryServer`, transport capturant l'enveloppe)
   sur une erreur et une transaction, avant et après.
 
-  Le `name` **chaîne** de `contexts.runtime`, `contexts.os` et
-  `contexts.browser` passe désormais par le nettoyage des valeurs
-  (`scrubText`) au lieu de la rédaction par clé. Tout le reste ne bouge pas :
+  `contexts.runtime.name` et `contexts.os.name` sont conservés **quand leur
+  valeur est l'une de celles qu'écrit le SDK** : `node`, `vercel-edge`,
+  `cloudflare` ; `Linux`, `Windows`, `macOS`, `Mac OS X`, les distributions
+  Linux détectées par le SDK, etc. Correspondance exacte, relevée dans le code
+  du SDK 10.70. Tout le reste ne bouge pas :
+  - **toute autre valeur y reste rédigée**. Le SDK fusionne les données de
+    l'app par-dessus les siennes (`os: { ...sdkOs, ...event.contexts?.os }`),
+    donc `setContext("os", { name: lead.name })` arrive dans ce même champ, et
+    un nom nu n'a aucune forme que le nettoyage des valeurs saurait repérer.
+    C'est pourquoi la liste porte sur les valeurs et non sur les contexts
+    (constat de la revue indépendante) ;
   - `name` reste rédigé partout ailleurs : `extra`, `request.data`,
     breadcrumbs, contexts applicatifs (`setContext("lead", …)`), objets
     imbriqués dans un context SDK (`contexts.os.meta.name`), et un `name` non
     chaîne ;
-  - les autres clés sensibles d'un context SDK restent rédigées ;
-  - **`contexts.device.name` reste rédigé** : sur les SDK natifs c'est le nom
-    donné par le propriétaire (« iPhone de Jean Dupont »), et les SDK JS ne
-    l'écrivent jamais ;
-  - `app`, `culture`, `cloud_resource`, `trace` ne sont pas exemptés : le SDK
-    n'y écrit aucun `name`, une exemption ne laisserait passer que celui d'une
-    app.
+  - les autres clés sensibles de `runtime` / `os` restent rédigées ;
+  - **`browser.name` et `device.name` restent rédigés**. Aucun SDK JS n'écrit
+    ces contexts avant `beforeSend` : Relay les dérive du User-Agent ensuite,
+    donc rien n'est perdu. Sur les SDK natifs, `device.name` est le nom donné
+    par le propriétaire (« iPhone de Jean Dupont ») ;
+  - `app`, `culture`, `cloud_resource`, `trace` : le SDK n'y écrit aucun `name`.
+
+  Une valeur que le SDK écrirait sans figurer dans la liste reste `[REDACTED]`,
+  comme avant : c'est visible, jamais une fuite. `sdk-contexts.test.ts` fait
+  tourner le vrai SDK serveur pour détecter cette dérive au prochain bump de
+  `@sentry/nextjs`.
 
   Revient sur le coût accepté en 0.6.1 (`contexts.{browser,os,device}.name`),
   qui ne couvrait ni `runtime` ni les transactions — voir DECISIONS.md §18.

@@ -18,11 +18,11 @@
  * high-risk PII fields.
  *
  * `redact` itself applies the list everywhere. The event hooks do not, for one
- * case: the `name` the Sentry SDK writes in `contexts.runtime` / `contexts.os` /
- * `contexts.browser` ("node", "Linux") is product metadata that backs the
- * `runtime.name` / `os.name` tags — `scrubContexts` in ./scrub.ts value-scrubs
- * it instead (GRO-1505). `contexts.device.name` stays redacted: on native SDKs
- * it is the owner-given device name. Exception values are never passed through
+ * case: `contexts.runtime.name` / `contexts.os.name` survive when they hold a
+ * value the Sentry SDK writes ("node", "Linux") — product metadata that backs
+ * the `runtime.name` / `os.name` tags (`scrubContexts` in ./scrub.ts,
+ * GRO-1505). Any other value there, and `name` in every other context
+ * (`device.name` included), stays redacted. Exception values are never passed through
  * `redact` (a message has no key names); free text goes through `scrubText` in
  * ./scrub.ts instead, which replaces PII VALUES inside the text and leaves
  * filenames untouched.

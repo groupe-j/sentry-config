@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type BuildOptions, type Message, build } from "esbuild";
 import { describe, expect, it } from "vitest";
+import { modernRegexLiterals } from "./regex-literals.test-helper.js";
 
 /**
  * Client entry points, bundled the way a browser build would.
@@ -23,18 +24,6 @@ interface Bundle {
   builtins: string[];
   /** Bare specifiers other than Node builtins, i.e. third-party packages. */
   packages: string[];
-}
-
-/**
- * A regex literal starts where an expression can: after an indent, a
- * punctuator, or a keyword (`return /…/`, `void /…/`). A `/` after an
- * identifier, a number or `)` is a division and is not matched.
- */
-const REGEX_LITERAL =
-  /(?:^[ \t]*|[=(,:;!&|?{}[+\-*%<>~^]\s*|\b(?:return|void|typeof|case|in|of|else|throw|delete|await|yield)\s+)\/(?![/*])(?:[^/\n\\[]|\\.|\[(?:[^\]\\\n]|\\.)*\])+\/[dgimsuvy]*/gm;
-
-function unicodePropertyLiterals(code: string): string[] {
-  return (code.match(REGEX_LITERAL) ?? []).filter((l) => /\\[pP]\{/.test(l));
 }
 
 async function bundle(entry: string, options: BuildOptions = {}): Promise<Bundle> {
@@ -115,11 +104,12 @@ describe("client entries bundle for the browser", BUNDLER, () => {
   /**
    * esbuild does NOT lower `\p{…}` inside a character class (`/[\p{L}]/u`,
    * the shape of the email pattern), so the byte-identity trick above is blind
-   * to it. Those are found by scanning the bundle's regex literals instead.
+   * to it. The bundle's literals are read with the TypeScript parser instead
+   * (same helper as the source-level check in `scrub.test.ts`).
    */
-  it.each(CLIENT_ENTRIES)("%s bundles no \\p{…} regex literal", async (entry) => {
+  it.each(CLIENT_ENTRIES)("%s bundles no lookbehind or \\p{…} regex literal (parsed)", async (entry) => {
     const b = await bundle(entry, OWN_CODE);
-    expect(unicodePropertyLiterals(b.code)).toEqual([]);
+    expect(modernRegexLiterals(b.code)).toEqual([]);
   });
 
   it("both probes do detect a literal (guards the probes themselves)", async () => {
@@ -132,16 +122,25 @@ describe("client entries bundle for the browser", BUNDLER, () => {
       await compile(lookbehind),
     );
 
+    // Printed by the same esbuild printer as the entry bundles.
     for (const statement of [
       String.raw`export const r = /[\p{L}\p{N}]+@x/gu;`,
-      String.raw`export function f(s) { return /[\p{L}]+@x/u.test(s); }`,
-      String.raw`export function g(s) { if (s) { void /[\p{L}]/u.test(s); } }`,
+      String.raw`export function f(s) { return/[\p{L}]+@x/u.test(s); }`,
+      String.raw`export function g(s) { if (s) /\P{L}/u.test(s); }`,
+      String.raw`export default /(?<!a)b/;`,
     ]) {
-      expect(unicodePropertyLiterals(await compile(statement)), statement).toHaveLength(1);
+      expect(modernRegexLiterals(await compile(statement)), statement).toHaveLength(1);
     }
-    // …and a pattern compiled from a string, as `scrub.ts` does, is not one.
-    const fromString = await compile("export const r = new RegExp(String.raw`[\\p{L}]+`, 'u');");
-    expect(unicodePropertyLiterals(fromString)).toEqual([]);
+    // …and a pattern compiled from a string, as `scrub.ts` does, is not one —
+    // even when its source is full of slashes that look like literal bounds.
+    const fromString = await compile(
+      String.raw`/** e.g. /(?<=^|\s)token/ in a comment */
+      export const r = new RegExp(String.raw` +
+        "`(?<=/d/)[\\p{L}\\p{N}]+/[\\p{L}]+(?<![.])/`" +
+        String.raw`, "u");`,
+    );
+    expect(fromString).toContain("new RegExp(");
+    expect(modernRegexLiterals(fromString)).toEqual([]);
   });
 });
 

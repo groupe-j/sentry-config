@@ -31,11 +31,13 @@ This project follows [Semantic Versioning](https://semver.org/).
   membre de SDK introuvable contre le **vrai** build navigateur de
   `@sentry/nextjs` (témoin négatif : le barrel échoue). Aucun littéral regex à
   lookbehind (bundle comparé à celui qu'esbuild produit quand la fonctionnalité
-  est déclarée absente) ni à `\p{…}` (scan des littéraux : esbuild ne réécrit
-  pas `\p` dans une classe de caractères).
+  est déclarée absente) ni à `\p{…}` : esbuild ne réécrit pas `\p` dans une
+  classe de caractères, donc les littéraux du bundle sont aussi lus par le
+  parser TypeScript.
 - Le garde source « pas de littéral lookbehind / `\p{…}` » de `scrub.test.ts`
-  ne voyait un littéral qu'en colonne 0 ou après `= ( , : ;` : un
-  `return /…/` ou une ligne indentée passait. Préfixes élargis.
+  lit désormais les littéraux avec ce même parser
+  (`regex-literals.test-helper.ts`). L'ancienne heuristique textuelle ratait
+  `return /…/`, une ligne indentée, `export default /…/` et `\P{…}`.
 
 ## [1.3.0] - 2026-09-17
 

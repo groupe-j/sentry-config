@@ -1130,7 +1130,7 @@ Defined in: [redaction.ts:141](https://github.com/groupe-j/sentry-config/blob/ma
 
 > **scrubCookies**(`cookies`): `unknown`
 
-Defined in: [scrub.ts:520](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L520)
+Defined in: [scrub.ts:521](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L521)
 
 `event.request.cookies`: names are kept (they say which session was active),
 every value is dropped — a cookie value is a credential or tracking id.
@@ -1198,7 +1198,7 @@ Defined in: [redaction.ts:182](https://github.com/groupe-j/sentry-config/blob/ma
 
 > **scrubQueryString**(`qs`): `unknown`
 
-Defined in: [scrub.ts:494](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L494)
+Defined in: [scrub.ts:495](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L495)
 
 `event.request.query_string`: string, `{ key: value | value[] }` or `[key, value][]`.
 
@@ -1218,7 +1218,7 @@ Defined in: [scrub.ts:494](https://github.com/groupe-j/sentry-config/blob/main/s
 
 > **scrubRequestData**(`data`, `seen?`): `unknown`
 
-Defined in: [scrub.ts:469](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L469)
+Defined in: [scrub.ts:470](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L470)
 
 `event.request.data`: an object is walked; a JSON string is parsed, walked
 and re-serialised (so key-name redaction applies to it too); anything else —

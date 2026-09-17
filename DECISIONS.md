@@ -511,7 +511,7 @@ dit.
 
 **Pourquoi ces valeurs** — relevées dans le SDK 10.70, pas supposées :
 - `runtime` : `node` (`@sentry/node-core`), `vercel-edge` (`@sentry/vercel-edge`),
-  `cloudflare` (`@sentry/cloudflare`) ;
+  `cloudflare` (`@sentry/nextjs`, `getCloudflareRuntimeConfig`, sur OpenNext/Cloudflare) ;
 - `os` : `PLATFORM_NAMES` (`Windows`, `Android`, `FreeBSD`…), `Linux`, les
   distributions de `LINUX_DISTROS` (`Ubuntu Linux`, `Alpine Linux`…), `Mac OS X`
   et `macOS` (`sw_vers`).

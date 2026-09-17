@@ -381,8 +381,9 @@ function scrubEntry(key: string, v: unknown, seen: WeakSet<object>, depth: numbe
 /**
  * The `name` values the Sentry SDK writes as product metadata in
  * `contexts.runtime` and `contexts.os` — read from the SDK source (10.70), not
- * guessed: `runtime` from the `@sentry/node-core`, `@sentry/vercel-edge` and
- * `@sentry/cloudflare` clients; `os` from the node-core context integration
+ * guessed: `runtime` from the `@sentry/node-core` and `@sentry/vercel-edge`
+ * clients, and `@sentry/nextjs` on Cloudflare (`getCloudflareRuntimeConfig`);
+ * `os` from the node-core context integration
  * (`PLATFORM_NAMES`, `LINUX_DISTROS`, `sw_vers` on macOS). Redacting them by key
  * empties the `runtime.name` / `os.name` tags, and triage can no longer split
  * Node from edge issues.

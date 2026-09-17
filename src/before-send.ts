@@ -19,7 +19,15 @@ import {
 interface StackFrameLike {
   filename?: string;
   abs_path?: string;
+  function?: string;
+  module?: string;
+  lineno?: number;
+  colno?: number;
+  in_app?: boolean;
   vars?: Record<string, unknown>;
+  context_line?: string;
+  pre_context?: string[];
+  post_context?: string[];
 }
 
 // Loose Sentry event shape — typed locally to keep this package
@@ -31,6 +39,7 @@ export interface SentryEventLike {
   tags?: Record<string, unknown>;
   request?: {
     url?: string;
+    env?: Record<string, unknown>;
     data?: unknown;
     query_string?: unknown;
     cookies?: unknown;
@@ -43,6 +52,7 @@ export interface SentryEventLike {
     values?: {
       type?: string;
       value?: string;
+      mechanism?: { type?: string; data?: Record<string, unknown> };
       stacktrace?: { frames?: StackFrameLike[] };
     }[];
   };
@@ -79,6 +89,35 @@ function hasBrowserExtensionException(event: SentryEventLike): boolean {
 
 /** Tag set on an event whose scrubbing threw — see {@link failClosed}. */
 export const SCRUB_FAILED_TAG = "pii_scrub_failed";
+
+/**
+ * A frame carries PII in three places: local `vars`, source lines
+ * (`context_line: 'const email = "jean@…"'`) and the file URL of an inline
+ * script (`https://app/verify?token=…`). Filenames are only scanned when they
+ * hold a query or fragment, so ordinary paths are never rewritten.
+ */
+function scrubFrame(f: StackFrameLike, seen: WeakSet<object>): StackFrameLike {
+  const next: StackFrameLike = { ...f };
+  if (f.vars) next.vars = scrubDeep(f.vars, seen) as Record<string, unknown>;
+  if (typeof f.filename === "string" && /[?#]/.test(f.filename)) next.filename = scrubText(f.filename);
+  if (typeof f.abs_path === "string" && /[?#]/.test(f.abs_path)) next.abs_path = scrubText(f.abs_path);
+  if (typeof f.context_line === "string") next.context_line = scrubText(f.context_line);
+  if (Array.isArray(f.pre_context)) next.pre_context = f.pre_context.map((l) => (typeof l === "string" ? scrubText(l) : l));
+  if (Array.isArray(f.post_context)) next.post_context = f.post_context.map((l) => (typeof l === "string" ? scrubText(l) : l));
+  return next;
+}
+
+/** Client IP and IP-derived geolocation headers (proxies, Vercel, Cloudflare). */
+const IP_HEADER = /^(?:x-forwarded-for|x-real-ip|forwarded|cf-connecting-ip|true-client-ip|x-client-ip|x-vercel-forwarded-for|x-vercel-proxied-for|x-vercel-ip-.+|cf-ipcity|cf-iplatitude|cf-iplongitude)$/i;
+
+/** Header NAMES that are credentials are dropped by `scrubHeaders`; the rest have their VALUES scanned (`Referer: …?token=`). */
+function scrubHeaderValues(headers: Record<string, string>): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [k, v] of Object.entries(scrubHeaders(headers))) {
+    result[k] = IP_HEADER.test(k) ? REDACTED : typeof v === "string" ? scrubText(v) : v;
+  }
+  return result;
+}
 
 function scrubTags(tags: Record<string, unknown>): Record<string, unknown> {
   const result: Record<string, unknown> = {};
@@ -118,10 +157,11 @@ function scrubEvent<E extends SentryEventLike>(event: E): E {
     next.request = {
       ...r,
       url: typeof r.url === "string" ? scrubText(r.url) : r.url,
+      env: r.env === undefined ? undefined : (scrubDeep(r.env, seen) as Record<string, unknown>),
       data: r.data === undefined ? undefined : scrubRequestData(r.data, seen),
       query_string: r.query_string === undefined ? undefined : scrubQueryString(r.query_string),
       cookies: r.cookies === undefined ? undefined : scrubCookies(r.cookies),
-      headers: r.headers ? scrubHeaders(r.headers) : undefined,
+      headers: r.headers ? scrubHeaderValues(r.headers) : undefined,
     };
   }
 
@@ -133,15 +173,12 @@ function scrubEvent<E extends SentryEventLike>(event: E): E {
       values: event.exception.values.map((v) => ({
         ...v,
         value: typeof v.value === "string" ? scrubText(v.value) : v.value,
-        stacktrace:
-          v.stacktrace?.frames?.some((f) => f.vars)
-            ? {
-                ...v.stacktrace,
-                frames: v.stacktrace.frames.map((f) =>
-                  f.vars ? { ...f, vars: scrubDeep(f.vars, seen) as Record<string, unknown> } : f,
-                ),
-              }
-            : v.stacktrace,
+        mechanism: v.mechanism?.data
+          ? { ...v.mechanism, data: scrubDeep(v.mechanism.data, seen) as Record<string, unknown> }
+          : v.mechanism,
+        stacktrace: v.stacktrace?.frames
+          ? { ...v.stacktrace, frames: v.stacktrace.frames.map((f) => scrubFrame(f, seen)) }
+          : v.stacktrace,
       })),
     };
   }
@@ -175,32 +212,53 @@ function scrubEvent<E extends SentryEventLike>(event: E): E {
  * frames without locals — and drop every free-text field.
  */
 function failClosed<E extends SentryEventLike>(event: E, appName?: string): E {
-  const values = event.exception?.values?.map((v) => ({
-    type: v.type,
-    value: REDACTED_VALUE,
-    stacktrace: v.stacktrace?.frames
-      ? { frames: v.stacktrace.frames.map(({ vars: _vars, ...frame }) => frame) }
-      : undefined,
-  }));
-  const minimal: SentryEventLike = {
-    tags: { ...(appName ? { app: appName } : {}), [SCRUB_FAILED_TAG]: "true" },
-    ...(values ? { exception: { values } } : {}),
-    ...(event.message !== undefined ? { message: REDACTED } : {}),
-  };
-  const kept: Record<string, unknown> = {};
-  // Envelope/grouping metadata — never user data.
-  for (const key of ["event_id", "timestamp", "start_timestamp", "level", "platform", "type", "environment", "release", "dist", "sdk", "fingerprint"]) {
-    if (key in event) kept[key] = (event as Record<string, unknown>)[key];
+  const result: Record<string, unknown> = {};
+  // Envelope metadata — never user data. `fingerprint` is NOT kept: apps build
+  // it from arbitrary values. Each read is guarded: the event that made
+  // scrubbing throw may throw again on any access.
+  for (const key of ["event_id", "timestamp", "start_timestamp", "level", "platform", "type", "environment", "release", "dist", "sdk"]) {
+    try {
+      if (key in event) result[key] = (event as Record<string, unknown>)[key];
+      // eslint-disable-next-line @groupe-j/no-error-swallow -- this IS the error path: an unreadable envelope field is left out so the fail-closed event still ships.
+    } catch {
+      // Unreadable field: leave it out rather than fail the whole fallback.
+    }
   }
-  return { ...kept, ...minimal } as E;
+  try {
+    const values = event.exception?.values?.map((v) => ({
+      type: typeof v.type === "string" ? v.type : undefined,
+      value: REDACTED_VALUE,
+      stacktrace: v.stacktrace?.frames ? { frames: v.stacktrace.frames.map(safeFrame) } : undefined,
+    }));
+    if (values) result.exception = { values };
+  } catch {
+    result.exception = { values: [{ type: "Error", value: REDACTED_VALUE }] };
+  }
+  result.message = REDACTED_VALUE;
+  result.tags = { ...(appName ? { app: appName } : {}), [SCRUB_FAILED_TAG]: "true" };
+  return result as E;
+}
+
+/** Location only: no locals, no source lines, no query string in the file URL. */
+function safeFrame(f: StackFrameLike): StackFrameLike {
+  const frame: StackFrameLike = {};
+  if (typeof f.filename === "string") frame.filename = f.filename.split(/[?#]/)[0];
+  if (typeof f.abs_path === "string") frame.abs_path = f.abs_path.split(/[?#]/)[0];
+  for (const key of ["function", "module", "lineno", "colno", "in_app"] as const) {
+    if (f[key] !== undefined) (frame as Record<string, unknown>)[key] = f[key];
+  }
+  return frame;
 }
 
 export function createSentryBeforeSend<E extends SentryEventLike>(
   appName: string,
 ): (event: E) => E | null {
   return (event: E): E | null => {
-    if (hasBrowserExtensionException(event)) return null;
     try {
+      // Inside the `try`: a throwing getter on `exception.values` must reach
+      // the fail-closed path, not escape — the SDK drops an event whose
+      // `beforeSend` throws.
+      if (hasBrowserExtensionException(event)) return null;
       const next = scrubEvent(event);
       next.tags = { ...next.tags, app: appName };
       return next;

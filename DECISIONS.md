@@ -415,9 +415,15 @@ vraies, et chacune a sa parade :
   aussi : c'est un diagnostic. Une liste de messages ordinaires est épinglée
   octet pour octet par `scrub.test.ts`.
 - *Performance* : chaque motif est protégé par un `includes` sur un caractère
-  sans lequel il ne peut pas matcher, et tout quantificateur ouvert est borné.
-  Une chaîne adverse de 100 Ko reste linéaire, et un événement d'environ 40 Ko
-  se nettoie en quelques millisecondes (les deux sont épinglés par un test).
+  sans lequel il ne peut pas matcher. Le coût d'une regex vaut **(positions de
+  départ) × (longueur scannée par départ)**, donc borner les quantificateurs ne
+  suffit pas : un **préfixe répété** (`eyJ-eyJ-…`, `Key (a)=(Key (a)=(…`)
+  multiplie les départs. La revue indépendante l'a mesuré sur la première
+  version : 6 s pour 100 Ko, 82 s pour un attribut de log de 480 Ko. Chaque
+  motif consomme donc sans redémarrer, ou refuse par un lookbehind un départ
+  collé au candidat précédent, **et** borne tout quantificateur ouvert.
+  `scrub.test.ts` épingle les deux formes d'entrée adverse. Mesure : environ
+  1,4 ms pour un événement de 62 Ko.
 - *Fuites invisibles* : `[redacted]` reste visible dans l'UI.
 
 **Fail-closed** : si le nettoyage lève une exception, on n'envoie **pas**
@@ -431,11 +437,30 @@ ne se voit **nulle part**, puisque l'événement part normalement. Chaque appel
 et chaque motif est couvert par au moins un test qui échoue quand on le retire
 (tests de mutation lancés à la livraison).
 
-**Limites connues** (pas couvertes) : un token placé dans le **chemin** d'une URL
-(`/invite/<token>`), une valeur non quotée dans un dump
-(`phone: 33612345678`), une valeur numérique dans un JSON tronqué par le SDK, et
-les PII sans motif reconnaissable (nom, adresse postale) dans un message libre.
-Ces cas restent à la charge de l'appelant.
+**Compatibilité navigateur** : les motifs utilisent des lookbehinds et `\p{L}`.
+Une regex non supportée est une `SyntaxError` au **chargement du module**, ce qui
+casserait tout Sentry côté client. Il faut Safari ≥ 16.4, soit la cible
+minimale de Next.js 16, que tout le portefeuille utilise. Une app qui cible un
+navigateur plus ancien ne doit pas utiliser `/client` sans transpiler ces regex.
+
+**Hors périmètre, délibérément** : `event.user`, dont l'email n'arrive que par
+l'opt-in explicite `setSentryUser({ email })`. Les attributs de scope des logs
+(`user.*`) aussi : le SDK les fusionne **après** `beforeSendLog`, aucun hook ne
+peut donc les voir.
+
+**Limites connues** (pas couvertes) :
+- un token placé dans le **chemin** d'une URL (`/invite/<token>`, `/reset/<token>`) ;
+- une valeur non quotée dans un dump (`phone: 33612345678`) ;
+- les champs `identifier` / `value` d'une ligne `verification` de Better Auth
+  dans un dump Prisma : les noms sont trop génériques ;
+- les journaux de requêtes d'autres ORM (`PARAMETERS: [...]`, `prisma:query … [...]`) ;
+- une valeur numérique dans un JSON tronqué par le SDK ;
+- les PII sans motif reconnaissable (nom, adresse postale) dans un message libre.
+
+Ces cas restent à la charge de l'appelant. Faux positifs acceptés :
+`name: "web"` dans un dump de configuration (la clé large n'est appliquée
+qu'avec le séparateur `:`, jamais au `=` du SQL), `nextPageToken=…`, et
+`key=<valeur de 6 caractères ou plus>` dans une URL.
 
 ---
 

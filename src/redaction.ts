@@ -33,6 +33,9 @@ const SENSITIVE_KEYS = new Set([
   "emails",
   "phone",
   "phonenumber",
+  "telephone",
+  "mobile",
+  "mobilephone",
   "name",
   "fullname",
   "firstname",
@@ -41,6 +44,9 @@ const SENSITIVE_KEYS = new Set([
   "familyname",
   "dateofbirth",
   "dob",
+  "birthdate",
+  "birthday",
+  "ip",
 
   // Lead / contact free-text (leads schema across portfolio apps —
   // `name`/`location`/`description` carry a person's identity, home town,
@@ -69,6 +75,8 @@ const SENSITIVE_KEYS = new Set([
   "shippingaddress",
   "postalcode",
   "zipcode",
+  "remoteaddr", // request.env.REMOTE_ADDR
+  "city",
 
   // Auth + secrets
   "password",

@@ -52,9 +52,26 @@ This project follows [Semantic Versioning](https://semver.org/).
 Minor et non patch : nouvelle API, et deux nouveaux hooks posés par les init
 helpers. Rien n'est retiré. Le taux d'échantillonnage ne change pas.
 
-Coût : chaque motif est protégé par un `includes` et tout quantificateur ouvert
-est borné. Une chaîne adverse de 100 Ko reste linéaire, et un événement d'environ
-40 Ko se nettoie en quelques millisecondes. Les deux sont épinglés par un test.
+Aussi couverts, suite à la revue indépendante :
+- les valeurs d'en-têtes (`Referer: …?token=`) ;
+- les en-têtes d'IP client et de géolocalisation (`x-forwarded-for`, `x-vercel-ip-*`) ;
+- `request.env.REMOTE_ADDR` et `exception.mechanism.data` ;
+- `filename`, `context_line` et `pre_context`/`post_context` des frames ;
+- le token de bot Telegram dans un chemin ;
+- `params:` sur une ligne ou échappé en JSON ;
+- `Failing row contains (…)`, les clés Postgres imbriquées et les deux tuples d'exclusion ;
+- les URL encodées imbriquées (décodées une fois) ;
+- les codes à 6 chiffres ;
+- les emails Unicode.
+
+Nouvelles clés sensibles : `telephone`, `mobile`, `mobilephone`, `city`,
+`birthdate`, `birthday`, `ip`, `remoteaddr`.
+
+Coût : un événement de 62 Ko se nettoie en environ 1,4 ms. Chaque motif est
+protégé par un `includes`, borné, et ne redémarre pas sur un préfixe répété
+(DECISIONS.md §17). Les deux formes d'entrée adverse sont épinglées par un test.
+
+Compatibilité : les motifs demandent Safari ≥ 16.4, cible minimale de Next.js 16.
 
 ## [1.2.1] - 2026-09-03
 

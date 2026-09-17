@@ -186,6 +186,75 @@ describe("scrubText — URLs, credentials, keys", () => {
   });
 });
 
+describe("scrubText — independent review findings", () => {
+  it("catches Drizzle params flattened to one line or JSON-escaped", () => {
+    expect(scrubText(`{"err":"Failed query: select 1\\nparams: MAGICTOKENabcdef123456,5"}`)).toBe(
+      `{"err":"Failed query: select 1\\nparams: [redacted]"}`,
+    );
+    expect(scrubText("Failed query: select 1 where k = $1 params: MAGICTOKENabcdef123456")).toBe(
+      "Failed query: select 1 where k = $1 params: [redacted]",
+    );
+    // Without `Failed query`, a one-line `params:` is a genuine diagnostic.
+    expect(scrubText("Invalid params: expected object")).toBe("Invalid params: expected object");
+  });
+
+  it("redacts Postgres failing rows, nested key expressions and both exclusion tuples", () => {
+    expect(scrubText('null value in column "email" violates not-null constraint\nFailing row contains (1, Jean Dupont, 0612345678).')).toBe(
+      'null value in column "email" violates not-null constraint\nFailing row contains ([redacted]).',
+    );
+    expect(scrubText("Key (lower(name::text))=(Jean Dupont) already exists.")).toBe(
+      "Key (lower(name::text))=([redacted]) already exists.",
+    );
+    expect(scrubText("Key (lower((phone)::text))=(0612345678) already exists.")).toBe(
+      "Key (lower((phone)::text))=([redacted]) already exists.",
+    );
+    expect(scrubText("Key (room, during)=(12, [2026-09-17,2026-09-18)) conflicts with existing key (room, during)=(12, [2026-09-16,2026-09-18)).")).toBe(
+      "Key (room, during)=([redacted]) conflicts with existing key (room, during)=([redacted]).",
+    );
+  });
+
+  it("redacts a Telegram bot token in a URL path", () => {
+    expect(scrubText("POST https://api.telegram.org/bot123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw/sendMessage")).toBe(
+      "POST https://api.telegram.org/[redacted]/sendMessage",
+    );
+  });
+
+  it("decodes a nested URL once and scrubs its parameters", () => {
+    const out = scrubText("/login?redirect=%2Freset-password%3Ftoken%3DSECRETabc123&lang=fr");
+    expect(out).not.toContain("SECRETabc123");
+    expect(decodeURIComponent(out)).toBe("/login?redirect=/reset-password?token=[redacted]&lang=fr");
+    expect(scrubText("/x?next=%2Fu%3Femail%3Djean%2540example.com")).not.toContain("example.com");
+  });
+
+  it("covers 6-digit one-time codes but keeps upper-snake error codes", () => {
+    expect(scrubText("/verify?code=123456")).toBe("/verify?code=[redacted]");
+    expect(scrubText("/error?code=ERR_INVALID_ARG_TYPE")).toBe("/error?code=ERR_INVALID_ARG_TYPE");
+  });
+
+  it("covers remaining credential shapes", () => {
+    expect(scrubText("connect redis://:supersecret@cache.internal:6379")).toBe("connect redis://:[redacted]@cache.internal:6379");
+    expect(scrubText("GET /b.pdf?X-Goog-Signature=0a1b2c3d&X-Goog-Expires=600")).toBe("GET /b.pdf?X-Goog-Signature=[redacted]&X-Goog-Expires=600");
+    expect(scrubText("Authorization: Bearer abcdefghijklmnopqrstuvwx")).toBe("Authorization: Bearer [redacted]");
+    expect(scrubText("key re_123abc45_AbCdEfGhIjKlMnOpQr leaked")).toBe("key [redacted] leaked");
+  });
+
+  it("redacts a Unicode e-mail whole, leaves an SSH remote alone", () => {
+    expect(scrubText("to jérôme.dupont@example.fr failed")).toBe("to [redacted] failed");
+    expect(scrubText("git clone git@github.com:groupe-j/repo.git")).toBe("git clone git@github.com:groupe-j/repo.git");
+  });
+
+  it("keeps broad PII keys (`name`) in SQL and code comparisons", () => {
+    const sql = `SELECT "id" FROM "products" WHERE "name" = 'Chair'`;
+    expect(scrubText(sql)).toBe(sql);
+    expect(scrubText('data: { name: "Jean Dupont", role: "MEMBER" }')).toBe('data: { name: "[redacted]", role: "MEMBER" }');
+  });
+
+  it("covers the keys missing from the list (telephone, mobile, city, birthDate, ip)", () => {
+    const out = scrubText('data: { telephone: "0612345678", mobile: "0712345678", city: "Metz", birthDate: "1990-01-01", ip: "82.1.2.3" }');
+    expect(out).toBe('data: { telephone: "[redacted]", mobile: "[redacted]", city: "[redacted]", birthDate: "[redacted]", ip: "[redacted]" }');
+  });
+});
+
 describe("isSecretName / isSecretParam", () => {
   it("keeps weak names URL-only: `code` as an object key or JSON field is a diagnostic", () => {
     expect(isSecretName("code")).toBe(false);
@@ -271,6 +340,13 @@ describe("scrubQueryString / scrubCookies", () => {
       ["code", REDACTED_VALUE],
       ["page", "2"],
     ]);
+  });
+
+  it("scrubs array values of an object query_string", () => {
+    expect(scrubQueryString({ token: ["abc", "def"], page: ["1"] })).toEqual({
+      token: [REDACTED_VALUE, REDACTED_VALUE],
+      page: ["1"],
+    });
   });
 
   it("keeps cookie names, drops every value", () => {
@@ -363,6 +439,70 @@ describe("createSentryBeforeSend — no PII leaves the process", () => {
     const snapshot = structuredClone(input);
     beforeSend(input);
     expect(input).toEqual(snapshot);
+  });
+
+  it("scrubs header values, frame source lines and inline-script file URLs", () => {
+    const out = beforeSend({
+      request: { headers: { referer: MAGIC_LINK_URL, "user-agent": "Mozilla/5.0" } },
+      exception: {
+        values: [
+          {
+            type: "Error",
+            value: "boom",
+            stacktrace: {
+              frames: [
+                {
+                  filename: `https://app.example.com/verify?token=${TOKEN}`,
+                  context_line: `  const email = "${EMAIL}";`,
+                  pre_context: [`// owner ${EMAIL}`],
+                  post_context: ["  return null;"],
+                  lineno: 3,
+                },
+                { filename: "/var/task/node_modules/.pnpm/@sentry+nextjs@10.65.0_next@16.3.3/node_modules/x.js" },
+              ],
+            },
+          },
+        ],
+      },
+    })!;
+    const serialised = JSON.stringify(out);
+    expect(serialised).not.toContain(TOKEN);
+    expect(serialised).not.toContain(EMAIL);
+    const frames = out.exception!.values![0]!.stacktrace!.frames!;
+    expect(frames[0]!.post_context).toEqual(["  return null;"]);
+    expect(frames[1]!.filename).toBe("/var/task/node_modules/.pnpm/@sentry+nextjs@10.65.0_next@16.3.3/node_modules/x.js");
+    expect(out.request!.headers!["user-agent"]).toBe("Mozilla/5.0");
+  });
+
+  it("redacts client-IP headers, request.env.REMOTE_ADDR and mechanism data", () => {
+    const out = beforeSend({
+      request: {
+        headers: { "x-forwarded-for": "81.1.2.3", "x-vercel-ip-city": "Metz", accept: "text/html" },
+        env: { REMOTE_ADDR: "81.1.2.3", SERVER_NAME: "app" },
+      },
+      exception: {
+        values: [{ type: "Error", value: "boom", mechanism: { type: "generic", data: { url: `https://app/?token=${TOKEN}` } } }],
+      },
+    })!;
+    expect(out.request!.headers).toEqual({ "x-forwarded-for": REDACTED, "x-vercel-ip-city": REDACTED, accept: "text/html" });
+    expect(out.request!.env).toEqual({ REMOTE_ADDR: REDACTED, SERVER_NAME: "app" });
+    expect(out.exception!.values![0]!.mechanism).toEqual({ type: "generic", data: { url: "https://app/?token=[redacted]" } });
+  });
+
+  it("fails closed even when reading exception.values throws, and drops fingerprint", () => {
+    const hostile: SentryEventLike & Record<string, unknown> = { event_id: "e1", fingerprint: [EMAIL] };
+    Object.defineProperty(hostile, "exception", {
+      enumerable: true,
+      get() {
+        return { get values(): never { throw new Error("x"); } };
+      },
+    });
+    let out: (SentryEventLike & Record<string, unknown>) | null = null;
+    expect(() => { out = beforeSend(hostile); }).not.toThrow();
+    expect(out).not.toBeNull();
+    expect(JSON.stringify(out)).not.toContain(EMAIL);
+    expect(out!.tags).toEqual({ app: "test-app", [SCRUB_FAILED_TAG]: "true" });
+    expect(out!.event_id).toBe("e1");
   });
 
   it("walks a cyclic and a pathologically deep extra without failing closed", () => {
@@ -462,12 +602,38 @@ describe("cost", () => {
       "x=".repeat(50_000),
       "Bearer " + "a".repeat(100_000),
       "postgres://" + "a".repeat(100_000) + ":",
+      // REPEATED PREFIXES — many start positions, each able to scan far. These
+      // are the shapes that were quadratic in the first version (6 s / 100 KB
+      // for `eyJ-`, 82 s for a 480 KB log attribute).
+      "eyJ-".repeat(25_000),
+      "eyJaaaaaaaa-".repeat(10_000),
+      "Key (a)=(".repeat(11_112),
+      "a Key (a)=(".repeat(9_000),
+      "Failing row contains (".repeat(4_500),
+      "sk-".repeat(33_000),
+      "sk_live_".repeat(12_500),
+      "bot123456:".repeat(10_000),
+      "a:\"".repeat(33_000),
+      "Bearer 1".repeat(12_500),
+      "Bearer " + "abcdefghij".repeat(10_000),
+      "?token=".repeat(14_000),
+      "x=%25".repeat(20_000),
+      "postgres://a:".repeat(7_500),
+      "Failed query: x\\nparams: ".repeat(4_000),
+      "jean@".repeat(20_000),
+      "é".repeat(50_000) + "@x.fr",
     ];
     for (const input of inputs) {
       const start = performance.now();
       scrubText(input);
-      expect(performance.now() - start, input.slice(0, 20)).toBeLessThan(250);
+      expect(performance.now() - start, input.slice(0, 24)).toBeLessThan(250);
     }
+  });
+
+  it("stays linear through beforeSendLog on a large repeated-prefix attribute", () => {
+    const start = performance.now();
+    createSentryBeforeSendLog()({ message: "x", attributes: { blob: "eyJaaaaaaaa-".repeat(40_000) } });
+    expect(performance.now() - start).toBeLessThan(500);
   });
 
   it("scrubs a large event in a few milliseconds", () => {

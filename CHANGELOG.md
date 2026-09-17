@@ -3,6 +3,46 @@
 All notable changes to `@groupe-j/sentry-config` are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [1.3.3] - 2026-09-17
+
+### Fixed
+
+- **`runtime.name` et `os.name` ne sont plus rédigés** (GRO-1505). Depuis 0.6.1,
+  `name` est une clé sensible et `event.contexts` passe par la rédaction par
+  clé : le `name` que le SDK écrit comme métadonnée produit partait en
+  `[REDACTED]` — `contexts.runtime.name` (`node`, `vercel-edge`) et
+  `contexts.os.name` (`Linux`, `Windows`). Les tags `runtime.name` / `os.name`
+  étaient vides dans Sentry : impossible de séparer les issues Node des issues
+  edge au triage. Les transactions le perdaient aussi depuis 1.3.0
+  (`createSentryBeforeSendTransaction`). Reproduit avec le vrai SDK
+  (`@sentry/nextjs` 10.70, `initSentryServer`, transport capturant l'enveloppe)
+  sur une erreur et une transaction, avant et après.
+
+  Le `name` **chaîne** de `contexts.runtime`, `contexts.os` et
+  `contexts.browser` passe désormais par le nettoyage des valeurs
+  (`scrubText`) au lieu de la rédaction par clé. Tout le reste ne bouge pas :
+  - `name` reste rédigé partout ailleurs : `extra`, `request.data`,
+    breadcrumbs, contexts applicatifs (`setContext("lead", …)`), objets
+    imbriqués dans un context SDK (`contexts.os.meta.name`), et un `name` non
+    chaîne ;
+  - les autres clés sensibles d'un context SDK restent rédigées ;
+  - **`contexts.device.name` reste rédigé** : sur les SDK natifs c'est le nom
+    donné par le propriétaire (« iPhone de Jean Dupont »), et les SDK JS ne
+    l'écrivent jamais ;
+  - `app`, `culture`, `cloud_resource`, `trace` ne sont pas exemptés : le SDK
+    n'y écrit aucun `name`, une exemption ne laisserait passer que celui d'une
+    app.
+
+  Revient sur le coût accepté en 0.6.1 (`contexts.{browser,os,device}.name`),
+  qui ne couvrait ni `runtime` ni les transactions — voir DECISIONS.md §18.
+  `redact()` (export public) garde la rédaction par clé partout ; seuls les
+  hooks d'événement (`createSentryBeforeSend`,
+  `createSentryBeforeSendTransaction`, `scrubSentryEvent`) appliquent
+  l'exemption.
+
+  Patch : moins de sur-rédaction, aucune API changée. Les apps en `^1.3.x`
+  l'obtiennent à la prochaine installation.
+
 ## [1.3.2] - 2026-09-17
 
 ### Fixed

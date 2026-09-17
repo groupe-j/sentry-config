@@ -482,6 +482,52 @@ ouverts restants sont ceux listés ici.
 
 ---
 
+## 18. Le `name` des contexts SDK (`runtime`, `os`, `browser`) n'est pas rédigé par clé
+
+**Contexte** (GRO-1505, revue de ridesamui-t3#801, 2026-09-17) : 0.6.1 a ajouté
+`name` aux clés sensibles (M5, leads) en acceptant un coût documenté :
+`contexts.{browser,os,device}.name` part en `[REDACTED]`. Deux choses n'étaient
+pas dans ce calcul. Le context **`runtime`** (`node` / `vercel-edge`), qui porte
+le tag de triage `runtime.name`. Et les **transactions**, rédigées elles aussi
+depuis 1.3.0. Résultat : `runtime.name` et `os.name` vides sur toutes les issues,
+et plus moyen de séparer Node d'edge.
+
+**Décision** : `scrubContexts` (`src/scrub.ts`) applique `scrubDeep` à
+`event.contexts`, sauf pour **un** champ : le `name` **chaîne** de
+`contexts.runtime`, `contexts.os` et `contexts.browser`, qui passe par
+`scrubText` (nettoyage des valeurs) au lieu de la rédaction par clé.
+
+**Pourquoi cette liste et pas plus** — relevé dans le SDK (10.70), pas supposé :
+- `runtime.name` : `@sentry/node-core` (`{ name: "node", version }`) et
+  `@sentry/vercel-edge` (`{ name: "vercel-edge" }`).
+- `os.name` : intégration context de Node (`Linux`, `Windows`, `Mac OS X`, distro).
+- `browser.name` : le SDK navigateur n'écrit ni `browser`, ni `os`, ni `device`.
+  Relay les dérive du User-Agent **après** `beforeSend`. L'exemption ne sert qu'à
+  une app qui le poserait, et un nom de navigateur n'est jamais personnel.
+- **`device` exclu** : Node n'y écrit pas de `name`, le navigateur non plus.
+  Sur les SDK natifs, `device.name` est le nom donné par le propriétaire
+  (« iPhone de Jean Dupont »), que Sentry traite lui-même comme PII. Aucun gain
+  sur ce portefeuille, et un trou latent.
+- **`app`, `culture`, `cloud_resource`, `trace` exclus** : le SDK n'y écrit aucun
+  `name` (`spanToTraceContext` : ids, `op`, `data`, `status`, `origin`). Les
+  exempter ne laisserait passer que le `name` d'une app.
+
+**Ce qui reste rédigé** : `name` partout ailleurs (`extra`, `request.data`,
+breadcrumbs, contexts applicatifs), un `name` imbriqué dans un context SDK, un
+`name` non chaîne, et toutes les autres clés sensibles de ces contexts. La
+valeur exemptée passe quand même par `scrubText` : `runtime.name` contenant un
+email ou `?token=` est nettoyé. `redact()` (export public) garde la rédaction
+par clé sans exception : l'exemption vit dans les hooks d'événement.
+
+**Conséquences si renversé** : (a) retirer l'exemption rend de nouveau
+`runtime.name` / `os.name` vides, sans que rien ne casse ; (b) l'élargir (context
+entier, `device`, n'importe quel champ, profondeur quelconque) laisse partir un
+`name` de lead posé dans un context au nom réservé. Les deux sens sont épinglés
+par `redaction.test.ts`, avec 14 mutants tués à la livraison, et vérifiés de
+bout en bout avec le vrai SDK serveur (erreur + transaction).
+
+---
+
 ## Comment ajouter une nouvelle décision
 
 Quand tu fais un choix non-évident lors d'un futur refactor :

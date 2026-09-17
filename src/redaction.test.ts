@@ -186,12 +186,12 @@ describe("SDK-written runtime/os names survive key-name redaction (GRO-1505)", (
 
   it.each(["vercel-edge", "cloudflare"])("keeps the %s runtime name", (name) => {
     const out = beforeSend({ contexts: { runtime: { name } } }) as WithContexts;
-    expect(out.contexts.runtime!.name).toBe(name);
+    expect(out.contexts.runtime?.name).toBe(name);
   });
 
   it.each(["Windows", "macOS", "Mac OS X", "Ubuntu Linux", "Alpine Linux", "Red Hat Linux"])("keeps the %s os name", (name) => {
     const out = beforeSend({ contexts: { os: { name } } }) as WithContexts;
-    expect(out.contexts.os!.name).toBe(name);
+    expect(out.contexts.os?.name).toBe(name);
   });
 
   it("redacts an app value written over the SDK's (setContext / captureException hint)", () => {
@@ -208,15 +208,15 @@ describe("SDK-written runtime/os names survive key-name redaction (GRO-1505)", (
   it("matches SDK values exactly (no case folding, no prefix)", () => {
     for (const name of ["linux", "Linux Jean Dupont", "node ", "Node"]) {
       const out = beforeSend({ contexts: { os: { name }, runtime: { name } } }) as WithContexts;
-      expect(out.contexts.os!.name).toBe(REDACTED);
-      expect(out.contexts.runtime!.name).toBe(REDACTED);
+      expect(out.contexts.os?.name).toBe(REDACTED);
+      expect(out.contexts.runtime?.name).toBe(REDACTED);
     }
   });
 
   it("keeps an SDK name only in its own context", () => {
     const out = beforeSend({ contexts: { runtime: { name: "Linux" }, os: { name: "node" } } }) as WithContexts;
-    expect(out.contexts.runtime!.name).toBe(REDACTED);
-    expect(out.contexts.os!.name).toBe(REDACTED);
+    expect(out.contexts.runtime?.name).toBe(REDACTED);
+    expect(out.contexts.os?.name).toBe(REDACTED);
   });
 
   it("keeps redacting every other sensitive key inside an SDK context", () => {
@@ -228,7 +228,7 @@ describe("SDK-written runtime/os names survive key-name redaction (GRO-1505)", (
 
   it("redacts a non-string name in an SDK context", () => {
     const out = beforeSend({ contexts: { runtime: { name: ["node"] } } }) as WithContexts;
-    expect(out.contexts.runtime!.name).toBe(REDACTED);
+    expect(out.contexts.runtime?.name).toBe(REDACTED);
   });
 
   it("keeps redacting name in browser, device, app, culture, cloud_resource and trace contexts", () => {
@@ -247,11 +247,11 @@ describe("SDK-written runtime/os names survive key-name redaction (GRO-1505)", (
     }) as WithContexts;
     expect(out.contexts.browser).toEqual({ name: REDACTED, version: "140.0" });
     expect(out.contexts.device).toEqual({ name: REDACTED, arch: "arm64" });
-    expect(out.contexts.app!.name).toBe(REDACTED);
-    expect(out.contexts.culture!.name).toBe(REDACTED);
-    expect(out.contexts.cloud_resource!.name).toBe(REDACTED);
-    expect(out.contexts.trace!.name).toBe(REDACTED);
-    expect((out.contexts.trace!.data as Record<string, unknown>).name).toBe(REDACTED);
+    expect(out.contexts.app?.name).toBe(REDACTED);
+    expect(out.contexts.culture?.name).toBe(REDACTED);
+    expect(out.contexts.cloud_resource?.name).toBe(REDACTED);
+    expect(out.contexts.trace?.name).toBe(REDACTED);
+    expect((out.contexts.trace?.data as Record<string, unknown>).name).toBe(REDACTED);
   });
 
   it("keeps redacting a lead name in extra, request.data, breadcrumbs and custom contexts", () => {
@@ -266,12 +266,12 @@ describe("SDK-written runtime/os names survive key-name redaction (GRO-1505)", (
       request: { data: Record<string, unknown> };
       breadcrumbs: { data: Record<string, unknown> }[];
     };
-    expect(out.contexts.runtime!.name).toBe("node");
+    expect(out.contexts.runtime?.name).toBe("node");
     expect(out.contexts.lead).toEqual({ name: REDACTED, status: "new" });
     expect(out.contexts.runtimeLead).toEqual({ name: REDACTED, status: "new" });
     expect(out.extra).toEqual({ lead: { name: REDACTED, status: "new" }, name: REDACTED });
     expect(out.request.data).toEqual({ name: REDACTED });
-    expect(out.breadcrumbs[0]!.data).toEqual({ name: REDACTED, status: "new" });
+    expect(out.breadcrumbs[0]?.data).toEqual({ name: REDACTED, status: "new" });
     expect(JSON.stringify(out)).not.toContain("Jean Dupont");
   });
 

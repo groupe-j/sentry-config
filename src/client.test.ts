@@ -235,8 +235,9 @@ describe("scrubSentryEvent — reachable from both client entries, without the b
     ["/client-lazy", loadLazy],
   ] as const)("%s exports the barrel's own function and it scrubs", async (_name, load) => {
     const client = await load();
-    const barrel = await import("./before-send.js");
-    expect(client.scrubSentryEvent).toBe(barrel.scrubSentryEvent);
+    // Same function object as the package root exports, not a copy.
+    const root = await import("./index.js");
+    expect(client.scrubSentryEvent).toBe(root.scrubSentryEvent);
     expect(client.SCRUB_FAILED_TAG).toBe("pii_scrub_failed");
 
     const out = client.scrubSentryEvent({

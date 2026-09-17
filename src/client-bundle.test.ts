@@ -25,6 +25,18 @@ interface Bundle {
   packages: string[];
 }
 
+/**
+ * A regex literal starts where an expression can: after an indent, a
+ * punctuator, or a keyword (`return /…/`, `void /…/`). A `/` after an
+ * identifier, a number or `)` is a division and is not matched.
+ */
+const REGEX_LITERAL =
+  /(?:^[ \t]*|[=(,:;!&|?{}[+\-*%<>~^]\s*|\b(?:return|void|typeof|case|in|of|else|throw|delete|await|yield)\s+)\/(?![/*])(?:[^/\n\\[]|\\.|\[(?:[^\]\\\n]|\\.)*\])+\/[dgimsuvy]*/gm;
+
+function unicodePropertyLiterals(code: string): string[] {
+  return (code.match(REGEX_LITERAL) ?? []).filter((l) => /\\[pP]\{/.test(l));
+}
+
 async function bundle(entry: string, options: BuildOptions = {}): Promise<Bundle> {
   const builtins: string[] = [];
   const packages = new Set<string>();
@@ -85,35 +97,51 @@ describe("client entries bundle for the browser", BUNDLER, () => {
   });
 
   /**
-   * Lookbehind and `\p{…}` as regex LITERALS are a parse-time SyntaxError
-   * before Safari 16.4 (DECISIONS.md §17). esbuild rewrites such a literal into
-   * `new RegExp(…)` when told the target lacks the feature, so a bundle that
-   * comes out byte-identical either way contains none — whatever wrote it:
-   * our sources, a future helper, or a transform.
+   * Lookbehind as a regex LITERAL is a parse-time SyntaxError before Safari
+   * 16.4 (DECISIONS.md §17) — for the whole chunk, app code included. esbuild
+   * rewrites such a literal into `new RegExp(…)` when told the target lacks
+   * the feature, so a bundle that comes out byte-identical either way contains
+   * none, whatever wrote it: our sources, a future helper, or a transform.
    */
-  it.each(CLIENT_ENTRIES)("%s bundles no lookbehind or \\p{…} regex literal", async (entry) => {
+  it.each(CLIENT_ENTRIES)("%s bundles no lookbehind regex literal", async (entry) => {
     const modern = await bundle(entry, OWN_CODE);
     const legacy = await bundle(entry, {
       ...OWN_CODE,
-      supported: {
-        "regexp-lookbehind-assertions": false,
-        "regexp-unicode-property-escapes": false,
-      },
+      supported: { "regexp-lookbehind-assertions": false },
     });
-    expect(modern.code).toContain("new RegExp(");
     expect(legacy.code).toBe(modern.code);
   });
 
-  it("the regex-literal probe does detect a literal (guards the probe itself)", async () => {
-    const probe = { stdin: { contents: "export const r = /(?<=a)b/u;", loader: "ts" } } satisfies BuildOptions;
-    const modern = await build({ ...probe, write: false, logLevel: "silent" });
-    const legacy = await build({
-      ...probe,
-      write: false,
-      logLevel: "silent",
-      supported: { "regexp-lookbehind-assertions": false },
-    });
-    expect(legacy.outputFiles[0]?.text).not.toBe(modern.outputFiles[0]?.text);
+  /**
+   * esbuild does NOT lower `\p{…}` inside a character class (`/[\p{L}]/u`,
+   * the shape of the email pattern), so the byte-identity trick above is blind
+   * to it. Those are found by scanning the bundle's regex literals instead.
+   */
+  it.each(CLIENT_ENTRIES)("%s bundles no \\p{…} regex literal", async (entry) => {
+    const b = await bundle(entry, OWN_CODE);
+    expect(unicodePropertyLiterals(b.code)).toEqual([]);
+  });
+
+  it("both probes do detect a literal (guards the probes themselves)", async () => {
+    const compile = async (contents: string, supported?: Record<string, boolean>): Promise<string> =>
+      (await build({ stdin: { contents, loader: "ts" }, write: false, logLevel: "silent", supported }))
+        .outputFiles[0]?.text ?? "";
+
+    const lookbehind = "export const r = /(?<=a)b/u;";
+    expect(await compile(lookbehind, { "regexp-lookbehind-assertions": false })).not.toBe(
+      await compile(lookbehind),
+    );
+
+    for (const statement of [
+      String.raw`export const r = /[\p{L}\p{N}]+@x/gu;`,
+      String.raw`export function f(s) { return /[\p{L}]+@x/u.test(s); }`,
+      String.raw`export function g(s) { if (s) { void /[\p{L}]/u.test(s); } }`,
+    ]) {
+      expect(unicodePropertyLiterals(await compile(statement)), statement).toHaveLength(1);
+    }
+    // …and a pattern compiled from a string, as `scrub.ts` does, is not one.
+    const fromString = await compile("export const r = new RegExp(String.raw`[\\p{L}]+`, 'u');");
+    expect(unicodePropertyLiterals(fromString)).toEqual([]);
   });
 });
 

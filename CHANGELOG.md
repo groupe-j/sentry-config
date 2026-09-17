@@ -15,20 +15,27 @@ This project follows [Semantic Versioning](https://semver.org/).
   navigateur de `@sentry/nextjs`). Côté navigateur, ces apps envoyaient donc
   les valeurs en clair.
 
-  Aucun octet en plus : `before-send.ts` était déjà dans le graphe des deux
-  entrées client (les hooks de `initSentryClient`). Les motifs restent compilés
-  à la demande (DECISIONS.md §17).
+  Aucun octet en plus dans le bundle d'une app : `before-send.ts` était déjà
+  dans le graphe des deux entrées client (les hooks de `initSentryClient`) ;
+  seuls les fichiers `dist/client*` gagnent les noms exportés. Les motifs
+  restent compilés à la demande (DECISIONS.md §17).
 
   Patch et non minor : c'est la même fonction, rendue atteignable là où la
   1.3.0 annonçait qu'on la composerait. Rien ne change pour un consommateur
   existant.
 
-- **Test de bundle** (`client-bundle.test.ts`, esbuild en cible navigateur) :
-  chaque entrée client se construit sans builtin Node ni paquet autre que le
-  SDK, sans membre de SDK introuvable contre le **vrai** build navigateur de
-  `@sentry/nextjs` (témoin négatif : le barrel échoue), et sans littéral regex
-  à lookbehind ou `\p{…}` — vérifié en comparant le bundle à celui qu'esbuild
-  produit quand ces fonctionnalités sont déclarées absentes.
+### Tests
+
+- **`client-bundle.test.ts`** (esbuild, cible navigateur) : chaque entrée
+  client se construit sans builtin Node ni paquet autre que le SDK, et sans
+  membre de SDK introuvable contre le **vrai** build navigateur de
+  `@sentry/nextjs` (témoin négatif : le barrel échoue). Aucun littéral regex à
+  lookbehind (bundle comparé à celui qu'esbuild produit quand la fonctionnalité
+  est déclarée absente) ni à `\p{…}` (scan des littéraux : esbuild ne réécrit
+  pas `\p` dans une classe de caractères).
+- Le garde source « pas de littéral lookbehind / `\p{…}` » de `scrub.test.ts`
+  ne voyait un littéral qu'en colonne 0 ou après `= ( , : ;` : un
+  `return /…/` ou une ligne indentée passait. Préfixes élargis.
 
 ## [1.3.0] - 2026-09-17
 

@@ -294,7 +294,7 @@ describe("scrubText — second review round", () => {
     const { readFileSync } = await import("node:fs");
     for (const file of ["src/scrub.ts", "src/before-send.ts", "src/redaction.ts"]) {
       const source = readFileSync(file, "utf8");
-      const literals = source.match(/(?:^|[=(,:;!&|?]\s*)\/(?![/*])(?:[^/\n\\[]|\\.|\[(?:[^\]\\\n]|\\.)*\])+\/[dgimsuvy]*/gm) ?? [];
+      const literals = source.match(/(?:^[ \t]*|[=(,:;!&|?{}[+\-*%<>~^]\s*|\b(?:return|void|typeof|case|in|of|else|throw|delete|await|yield)\s+)\/(?![/*])(?:[^/\n\\[]|\\.|\[(?:[^\]\\\n]|\\.)*\])+\/[dgimsuvy]*/gm) ?? [];
       const modern = literals.filter((l) => l.includes("(?<=") || l.includes("(?<!") || l.includes("\\p{"));
       expect(modern, file).toEqual([]);
     }

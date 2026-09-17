@@ -510,6 +510,22 @@ Sentry.init({
 An app that keeps its own `beforeSend` composes the scrubbing after it with
 `scrubSentryEvent(event)` (no app tag, same fail-closed behaviour).
 
+In a **browser** config, import it from the client subpath — never from the
+package root, whose barrel drags server-only SDK members (`captureCheckIn`) and
+fails the client build:
+
+```ts
+// instrumentation-client.ts
+import { scrubSentryEvent } from '@groupe-j/sentry-config/client'; // or /client-lazy
+
+Sentry.init({
+  beforeSend: (event) => {
+    const e = ownRedactor(event);
+    return e && scrubSentryEvent(e);
+  },
+});
+```
+
 App-level wrappers such as `toSentrySafeError` become redundant for events that
 go through these hooks; they still matter for anything logged **outside**
 Sentry (`console.error` to Vercel logs). Not covered: tokens in URL **paths**

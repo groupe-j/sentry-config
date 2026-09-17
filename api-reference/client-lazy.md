@@ -4,7 +4,7 @@
 
 ### InitSentryClientLazyOptions
 
-Defined in: [client-lazy.ts:78](https://github.com/groupe-j/sentry-config/blob/main/src/client-lazy.ts#L78)
+Defined in: [client-lazy.ts:85](https://github.com/groupe-j/sentry-config/blob/main/src/client-lazy.ts#L85)
 
 #### Extends
 
@@ -68,7 +68,7 @@ Extra error patterns to ignore (merged with DEFAULT_IGNORED_ERRORS).
 
 > `optional` **replay?**: [`LazyReplayMode`](#lazyreplaymode)
 
-Defined in: [client-lazy.ts:87](https://github.com/groupe-j/sentry-config/blob/main/src/client-lazy.ts#L87)
+Defined in: [client-lazy.ts:94](https://github.com/groupe-j/sentry-config/blob/main/src/client-lazy.ts#L94)
 
 `"lazy"` (default) — Replay fetched from the CDN after first paint or on
 the first captured error. `false` — no Replay at all, and unlike on the
@@ -293,7 +293,7 @@ Replay.
 
 > **initSentryClient**(`opts`): `void`
 
-Defined in: [client-lazy.ts:90](https://github.com/groupe-j/sentry-config/blob/main/src/client-lazy.ts#L90)
+Defined in: [client-lazy.ts:97](https://github.com/groupe-j/sentry-config/blob/main/src/client-lazy.ts#L97)
 
 #### Parameters
 
@@ -307,6 +307,24 @@ Defined in: [client-lazy.ts:90](https://github.com/groupe-j/sentry-config/blob/m
 
 ## References
 
+### SCRUB\_FAILED\_TAG
+
+Re-exports [SCRUB_FAILED_TAG](index.md#scrub_failed_tag)
+
+***
+
+### scrubSentryEvent
+
+Re-exports [scrubSentryEvent](index.md#scrubsentryevent)
+
+***
+
 ### SENTRY\_BROWSER\_TRACES\_SAMPLE\_RATE
 
 Re-exports [SENTRY_BROWSER_TRACES_SAMPLE_RATE](index.md#sentry_browser_traces_sample_rate)
+
+***
+
+### SentryEventLike
+
+Re-exports [SentryEventLike](index.md#sentryeventlike)

@@ -4,7 +4,7 @@
 
 ### InitSentryClientOptions
 
-Defined in: [client.ts:52](https://github.com/groupe-j/sentry-config/blob/main/src/client.ts#L52)
+Defined in: [client.ts:68](https://github.com/groupe-j/sentry-config/blob/main/src/client.ts#L68)
 
 #### Extends
 
@@ -68,7 +68,7 @@ Extra error patterns to ignore (merged with DEFAULT_IGNORED_ERRORS).
 
 > `optional` **replay?**: [`ReplayMode`](#replaymode)
 
-Defined in: [client.ts:68](https://github.com/groupe-j/sentry-config/blob/main/src/client.ts#L68)
+Defined in: [client.ts:84](https://github.com/groupe-j/sentry-config/blob/main/src/client.ts#L84)
 
 Replay strategy for this entry point: `true` (default — set up during
 `Sentry.init`, records from the very first line) or `false` (off).
@@ -314,7 +314,7 @@ the right call and the wasted bytes are the price.
 
 > **initSentryClient**(`opts`): `void`
 
-Defined in: [client.ts:71](https://github.com/groupe-j/sentry-config/blob/main/src/client.ts#L71)
+Defined in: [client.ts:87](https://github.com/groupe-j/sentry-config/blob/main/src/client.ts#L87)
 
 #### Parameters
 
@@ -328,6 +328,24 @@ Defined in: [client.ts:71](https://github.com/groupe-j/sentry-config/blob/main/s
 
 ## References
 
+### SCRUB\_FAILED\_TAG
+
+Re-exports [SCRUB_FAILED_TAG](index.md#scrub_failed_tag)
+
+***
+
+### scrubSentryEvent
+
+Re-exports [scrubSentryEvent](index.md#scrubsentryevent)
+
+***
+
 ### SENTRY\_BROWSER\_TRACES\_SAMPLE\_RATE
 
 Re-exports [SENTRY_BROWSER_TRACES_SAMPLE_RATE](index.md#sentry_browser_traces_sample_rate)
+
+***
+
+### SentryEventLike
+
+Re-exports [SentryEventLike](index.md#sentryeventlike)

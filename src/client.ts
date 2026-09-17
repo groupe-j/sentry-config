@@ -49,6 +49,22 @@ export type { ReplayMode } from "./client-core.js";
  */
 export { SENTRY_BROWSER_TRACES_SAMPLE_RATE } from "./sampling.js";
 
+/**
+ * For an app that keeps its own browser `beforeSend` (its own redactor, its
+ * own filters) and composes the package scrubbing after it:
+ *
+ *   beforeSend: (event) => { const e = ownRedactor(event); return e && scrubSentryEvent(e); }
+ *
+ * Same reason as above for living here: the barrel is off-limits to client
+ * modules. `before-send.ts` is already in this entry's graph (the hooks of
+ * `initSentryClient`), so the re-export adds no bytes.
+ */
+export {
+  SCRUB_FAILED_TAG,
+  scrubSentryEvent,
+  type SentryEventLike,
+} from "./before-send.js";
+
 export interface InitSentryClientOptions extends InitSentryClientBaseOptions {
   /**
    * Replay strategy for this entry point: `true` (default — set up during

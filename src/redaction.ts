@@ -12,15 +12,20 @@
  * entries stay narrow: `name` redacts a key literally named `name`, never
  * `filename` / `hostname` / `username` / `appName`.
  *
- * Tradeoff — these three broad keys also match Sentry's own context fields:
- * `name` → `contexts.{browser,os,device}.name` ("Chrome"/"Windows"); `description`
- * → `contexts.trace.description` (span label, e.g. "GET /api/foo"); `location`
- * → any library-set `location` in `extra`/breadcrumb data. All become `[REDACTED]`.
- * Accepted, visible cost — in this lead-heavy portfolio these are high-risk PII
- * fields, and the sibling `*.version`/`op`/`trace_id` context fields survive for
- * debugging. Exception values are never passed through `redact` (a message has
- * no key names); free text goes through `scrubText` in ./scrub.ts instead, which
- * replaces PII VALUES inside the text and leaves filenames untouched.
+ * Tradeoff — these broad keys also match fields libraries set for their own
+ * use: `description` / `location` in `extra` or breadcrumb data become
+ * `[REDACTED]`. Accepted, visible cost — in this lead-heavy portfolio they are
+ * high-risk PII fields.
+ *
+ * `redact` itself applies the list everywhere. The event hooks do not, for one
+ * case: the `name` the Sentry SDK writes in `contexts.runtime` / `contexts.os` /
+ * `contexts.browser` ("node", "Linux") is product metadata that backs the
+ * `runtime.name` / `os.name` tags — `scrubContexts` in ./scrub.ts value-scrubs
+ * it instead (GRO-1505). `contexts.device.name` stays redacted: on native SDKs
+ * it is the owner-given device name. Exception values are never passed through
+ * `redact` (a message has no key names); free text goes through `scrubText` in
+ * ./scrub.ts instead, which replaces PII VALUES inside the text and leaves
+ * filenames untouched.
  *
  * Why WeakSet cycle guard: Sentry events hold cycles via
  * `contexts.react.componentStack` or error.cause chains from Apollo/Prisma.

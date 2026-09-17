@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { redact, isSensitive, REDACTED } from "./redaction.js";
-import { createSentryBeforeSend } from "./before-send.js";
+import { createSentryBeforeSend, createSentryBeforeSendTransaction, scrubSentryEvent } from "./before-send.js";
+import { REDACTED_VALUE } from "./scrub.js";
 
 describe("isSensitive — lead PII keys (M5, RGPD)", () => {
   it("flags name / location / description (exact key)", () => {
@@ -155,5 +156,110 @@ describe("isSensitive — clés françaises des formulaires du portefeuille", ()
       nombre: 3,
       nomenclature: "NAF 71.11Z",
     });
+  });
+});
+
+describe("SDK-owned context names survive key-name redaction (GRO-1505)", () => {
+  // Shapes written by @sentry/node-core (client `runtime` option, context
+  // integration `os`) and @sentry/vercel-edge (`runtime`). `name` there is
+  // product metadata: redacting it empties the runtime.name / os.name tags.
+  const sdkContexts = () => ({
+    runtime: { name: "node", version: "v22.12.0" },
+    os: { name: "Linux", version: "6.1", kernel_version: "6.1.0" },
+    browser: { name: "Chrome", version: "140.0" },
+    trace: { trace_id: "t1", span_id: "s1", op: "http.server" },
+  });
+  interface WithContexts {
+    contexts: Record<string, Record<string, unknown>>;
+  }
+  const beforeSend: (event: Record<string, unknown>) => unknown = createSentryBeforeSend("test-app");
+  const hooks: Record<string, (event: Record<string, unknown>) => unknown> = {
+    beforeSend,
+    beforeSendTransaction: createSentryBeforeSendTransaction<Record<string, unknown>>(),
+    scrubSentryEvent: (e) => scrubSentryEvent(e),
+  };
+
+  for (const [hook, run] of Object.entries(hooks)) {
+    it(`keeps runtime/os/browser names — ${hook}`, () => {
+      const out = run({ type: hook === "beforeSend" ? undefined : "transaction", contexts: sdkContexts() }) as WithContexts;
+      expect(out.contexts).toEqual(sdkContexts());
+    });
+  }
+
+  it("keeps the edge runtime name", () => {
+    const out = beforeSend({ contexts: { runtime: { name: "vercel-edge" } } }) as WithContexts;
+    expect(out.contexts.runtime!.name).toBe("vercel-edge");
+  });
+
+  it("still scrubs the VALUE of an SDK context name", () => {
+    const out = beforeSend({
+      contexts: { runtime: { name: "jean.dupont@example.fr" }, os: { name: "Linux?token=abcdefghijklmnop" } },
+    }) as WithContexts;
+    expect(out.contexts.runtime!.name).toBe(REDACTED_VALUE);
+    expect(out.contexts.os!.name).toBe("Linux?token=[redacted]");
+  });
+
+  it("keeps redacting every other sensitive key inside an SDK context", () => {
+    const out = beforeSend({
+      contexts: { os: { name: "Linux", email: "jean@example.fr", description: "note", meta: { name: "Jean Dupont" } } },
+    }) as WithContexts;
+    expect(out.contexts.os).toEqual({ name: "Linux", email: REDACTED, description: REDACTED, meta: { name: REDACTED } });
+  });
+
+  it("redacts a non-string name in an SDK context (an object is not product metadata)", () => {
+    const out = beforeSend({ contexts: { runtime: { name: { first: "Jean", last: "Dupont" } } } }) as WithContexts;
+    expect(out.contexts.runtime!.name).toBe(REDACTED);
+  });
+
+  it("keeps redacting device.name (the owner-given device name on native SDKs)", () => {
+    const out = beforeSend({ contexts: { device: { name: "iPhone de Jean Dupont", arch: "arm64" } } }) as WithContexts;
+    expect(out.contexts.device).toEqual({ name: REDACTED, arch: "arm64" });
+  });
+
+  it("keeps redacting name in app, culture, cloud_resource and trace contexts (the SDK writes none)", () => {
+    const out = beforeSend({
+      contexts: {
+        app: { name: "Jean Dupont", app_start_time: "2026-09-17T00:00:00.000Z" },
+        culture: { name: "Jean Dupont", locale: "fr-FR" },
+        cloud_resource: { name: "Jean Dupont", "cloud.provider": "vercel" },
+        trace: { name: "Jean Dupont", trace_id: "t1", data: { name: "Jean Dupont" } },
+      },
+    }) as WithContexts;
+    expect(out.contexts.app!.name).toBe(REDACTED);
+    expect(out.contexts.culture!.name).toBe(REDACTED);
+    expect(out.contexts.cloud_resource!.name).toBe(REDACTED);
+    expect(out.contexts.trace!.name).toBe(REDACTED);
+    expect((out.contexts.trace!.data as Record<string, unknown>).name).toBe(REDACTED);
+  });
+
+  it("keeps redacting a lead name in extra, request.data, breadcrumbs and custom contexts", () => {
+    const lead = () => ({ name: "Jean Dupont", status: "new" });
+    const out = beforeSend({
+      contexts: { ...sdkContexts(), lead: lead(), runtimeLead: lead() },
+      extra: { lead: lead(), name: "Jean Dupont" },
+      request: { data: { name: "Jean Dupont" } },
+      breadcrumbs: [{ message: "lead", data: lead() }],
+    }) as WithContexts & {
+      extra: Record<string, Record<string, unknown> | string>;
+      request: { data: Record<string, unknown> };
+      breadcrumbs: { data: Record<string, unknown> }[];
+    };
+    expect(out.contexts.runtime!.name).toBe("node");
+    expect(out.contexts.lead).toEqual({ name: REDACTED, status: "new" });
+    expect(out.contexts.runtimeLead).toEqual({ name: REDACTED, status: "new" });
+    expect(out.extra).toEqual({ lead: { name: REDACTED, status: "new" }, name: REDACTED });
+    expect(out.request.data).toEqual({ name: REDACTED });
+    expect(out.breadcrumbs[0]!.data).toEqual({ name: REDACTED, status: "new" });
+    expect(JSON.stringify(out)).not.toContain("Jean Dupont");
+  });
+
+  it("keeps the cycle guard on an SDK context referenced twice", () => {
+    const os: Record<string, unknown> = { name: "Linux" };
+    const out = beforeSend({ contexts: { os, alias: os } }) as WithContexts;
+    expect(out.contexts.os).toEqual({ name: "Linux" });
+    expect(out.contexts.alias).toBe(REDACTED);
+    const reversed = beforeSend({ contexts: { alias: os, os } }) as WithContexts;
+    expect(reversed.contexts.alias).toEqual({ name: REDACTED });
+    expect(reversed.contexts.os).toBe(REDACTED);
   });
 });

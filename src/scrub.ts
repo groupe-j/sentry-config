@@ -364,13 +364,61 @@ export function scrubDeep(value: unknown, seen = new WeakSet<object>(), depth = 
 
   const result: Record<string, unknown> = {};
   for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
-    if (isCredentialKey(key)) result[key] = REDACTED;
-    // Credential names outside the key list (`magicToken`, `resetPassword`):
-    // only a string is a credential — `tokenCount: 3` stays.
-    else if (typeof v === "string" && v !== "" && isSecretName(key)) result[key] = REDACTED_VALUE;
-    else result[key] = scrubDeep(v, seen, depth + 1);
+    result[key] = scrubEntry(key, v, seen, depth);
   }
   return result;
+}
+
+/** One `key: value` of an object at `depth` — the per-key rule of {@link scrubDeep}. */
+function scrubEntry(key: string, v: unknown, seen: WeakSet<object>, depth: number): unknown {
+  if (isCredentialKey(key)) return REDACTED;
+  // Credential names outside the key list (`magicToken`, `resetPassword`):
+  // only a string is a credential — `tokenCount: 3` stays.
+  if (typeof v === "string" && v !== "" && isSecretName(key)) return REDACTED_VALUE;
+  return scrubDeep(v, seen, depth + 1);
+}
+
+/**
+ * Contexts whose `name` the Sentry SDK writes as product metadata:
+ * `runtime.name` (`node`, `vercel-edge`), `os.name` (`Linux`, `Windows`) and
+ * `browser.name`. Redacting it by key empties the `runtime.name` / `os.name`
+ * tags, and triage can no longer split Node from edge issues.
+ *
+ * Deliberately NOT here:
+ *  - `device` — on native SDKs `device.name` is the owner-given name
+ *    ("iPhone de Jean Dupont"); the JS SDKs never write it.
+ *  - `app`, `culture`, `cloud_resource`, `trace` — the SDK writes no `name`
+ *    there, so an exemption would only let an app's own `name` through.
+ */
+const SDK_NAMED_CONTEXTS = new Set(["runtime", "os", "browser"]);
+
+/**
+ * `event.contexts`: {@link scrubDeep}, except that the string `name` of an
+ * SDK-named context is value-scrubbed instead of redacted by key. Every other
+ * key of those contexts, nested objects included, keeps the key-name rule.
+ */
+export function scrubContexts(contexts: unknown, seen = new WeakSet<object>()): unknown {
+  if (!isPlainObject(contexts) || seen.has(contexts)) return scrubDeep(contexts, seen);
+  seen.add(contexts);
+
+  const result: Record<string, unknown> = {};
+  for (const [key, ctx] of Object.entries(contexts)) {
+    if (!SDK_NAMED_CONTEXTS.has(key) || !isPlainObject(ctx) || seen.has(ctx)) {
+      result[key] = scrubEntry(key, ctx, seen, 0);
+      continue;
+    }
+    seen.add(ctx);
+    const scrubbed: Record<string, unknown> = {};
+    for (const [field, v] of Object.entries(ctx)) {
+      scrubbed[field] = field === "name" && typeof v === "string" ? scrubText(v) : scrubEntry(field, v, seen, 1);
+    }
+    result[key] = scrubbed;
+  }
+  return result;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 /**

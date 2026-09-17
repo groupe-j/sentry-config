@@ -10,6 +10,7 @@ import { REDACTED, scrubHeaders } from "./redaction.js";
 import {
   IP_KEY,
   REDACTED_VALUE,
+  scrubContexts,
   scrubCookies,
   scrubDeep,
   scrubQueryString,
@@ -194,7 +195,7 @@ function scrubEvent<E extends SentryEventLike>(event: E): E {
   }
 
   if (event.extra) next.extra = scrubDeep(event.extra, seen) as Record<string, unknown>;
-  if (event.contexts) next.contexts = scrubDeep(event.contexts, seen) as Record<string, unknown>;
+  if (event.contexts) next.contexts = scrubContexts(event.contexts, seen) as Record<string, unknown>;
 
   if (event.spans) {
     next.spans = event.spans.map((s) => ({

@@ -3,6 +3,33 @@
 All notable changes to `@groupe-j/sentry-config` are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [1.3.1] - 2026-09-17
+
+### Fixed
+
+- **`scrubSentryEvent` exporté depuis `/client` et `/client-lazy`** (avec
+  `SCRUB_FAILED_TAG` et le type `SentryEventLike`). La 1.3.0 ne l'exposait
+  qu'à la racine : une app qui garde son propre `beforeSend` **navigateur** ne
+  pouvait pas composer le nettoyage, car importer le barrel depuis un module
+  client casse le build (`Sentry.captureCheckIn` n'existe pas dans le build
+  navigateur de `@sentry/nextjs`). Côté navigateur, ces apps envoyaient donc
+  les valeurs en clair.
+
+  Aucun octet en plus : `before-send.ts` était déjà dans le graphe des deux
+  entrées client (les hooks de `initSentryClient`). Les motifs restent compilés
+  à la demande (DECISIONS.md §17).
+
+  Patch et non minor : c'est la même fonction, rendue atteignable là où la
+  1.3.0 annonçait qu'on la composerait. Rien ne change pour un consommateur
+  existant.
+
+- **Test de bundle** (`client-bundle.test.ts`, esbuild en cible navigateur) :
+  chaque entrée client se construit sans builtin Node ni paquet autre que le
+  SDK, sans membre de SDK introuvable contre le **vrai** build navigateur de
+  `@sentry/nextjs` (témoin négatif : le barrel échoue), et sans littéral regex
+  à lookbehind ou `\p{…}` — vérifié en comparant le bundle à celui qu'esbuild
+  produit quand ces fonctionnalités sont déclarées absentes.
+
 ## [1.3.0] - 2026-09-17
 
 ### Added

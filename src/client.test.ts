@@ -229,6 +229,25 @@ describe("tracesSampleRate — GRO-869", () => {
   });
 });
 
+describe("scrubSentryEvent — reachable from both client entries, without the barrel", () => {
+  it.each([
+    ["/client", loadEager],
+    ["/client-lazy", loadLazy],
+  ] as const)("%s exports the barrel's own function and it scrubs", async (_name, load) => {
+    const client = await load();
+    const barrel = await import("./before-send.js");
+    expect(client.scrubSentryEvent).toBe(barrel.scrubSentryEvent);
+    expect(client.SCRUB_FAILED_TAG).toBe("pii_scrub_failed");
+
+    const out = client.scrubSentryEvent({
+      message: "Échec pour jean.dupont@example.com",
+      request: { url: "https://app.example/verify?token=abc123secret" },
+    });
+    expect(out.message).not.toContain("jean.dupont@example.com");
+    expect(out.request?.url).not.toContain("abc123secret");
+  });
+});
+
 describe("/client — eager entry point (unchanged behaviour)", () => {
   it("default (true) keeps the eager integration and the 100% on-error rate", async () => {
     stubBrowser();

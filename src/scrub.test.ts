@@ -4,6 +4,7 @@ import {
   createSentryBeforeSendLog,
   createSentryBeforeSendTransaction,
   SCRUB_FAILED_TAG,
+  scrubSentryEvent,
   type SentryEventLike,
 } from "./before-send.js";
 import { REDACTED } from "./redaction.js";
@@ -570,6 +571,13 @@ describe("createSentryBeforeSendTransaction", () => {
     expect((out.spans![0]!.data as Record<string, unknown>)["http.response.status_code"]).toBe(200);
     expect((out.spans![0]!.data as Record<string, unknown>)["http.request.header.cookie"]).toBe(REDACTED);
     expect(out.tags).toBeUndefined();
+  });
+});
+
+describe("scrubSentryEvent", () => {
+  it("scrubs without tagging, for composition after an app's own redactor", () => {
+    const out = scrubSentryEvent({ message: `mail ${EMAIL}`, tags: { area: "x" } });
+    expect(out).toEqual({ message: "mail [redacted]", tags: { area: "x" } });
   });
 });
 

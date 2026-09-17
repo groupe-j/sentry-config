@@ -507,6 +507,9 @@ Sentry.init({
 });
 ```
 
+An app that keeps its own `beforeSend` composes the scrubbing after it with
+`scrubSentryEvent(event)` (no app tag, same fail-closed behaviour).
+
 App-level wrappers such as `toSentrySafeError` become redundant for events that
 go through these hooks; they still matter for anything logged **outside**
 Sentry (`console.error` to Vercel logs). Not covered: tokens in URL **paths**

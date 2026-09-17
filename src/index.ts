@@ -15,6 +15,7 @@ export {
   createSentryBeforeSend,
   createSentryBeforeSendLog,
   createSentryBeforeSendTransaction,
+  scrubSentryEvent,
   type SentryEventLike,
   type SentryLogLike,
 } from "./before-send.js";

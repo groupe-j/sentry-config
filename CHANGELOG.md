@@ -42,7 +42,8 @@ This project follows [Semantic Versioning](https://semver.org/).
   brut ni nulle part. Part un événement minimal (types d'exception, frames sans
   locals, métadonnées d'enveloppe) tagué `pii_scrub_failed: "true"`.
 
-- Exports : `scrubText`, `scrubDeep`, `scrubRequestData`, `scrubQueryString`,
+- Exports : `scrubSentryEvent` (le nettoyage seul, sans tag, à composer après
+  un `beforeSend` applicatif), `scrubText`, `scrubDeep`, `scrubRequestData`, `scrubQueryString`,
   `scrubCookies`, `isSecretName`, `isSecretParam`, `REDACTED_VALUE`,
   `SCRUB_FAILED_TAG`, `SentryLogLike`. `SentryEventLike` gagne des champs
   optionnels (`message`, `logentry`, `transaction`, `request.url`,

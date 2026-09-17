@@ -269,18 +269,28 @@ export function createSentryBeforeSend<E extends SentryEventLike>(
 }
 
 /**
+ * The scrubbing of `beforeSend` without its app tag or extension filter — for
+ * an app that keeps its own `beforeSend` and composes this after it:
+ *
+ *   beforeSend: (event) => { const e = ownRedactor(event); return e && scrubSentryEvent(e); }
+ *
+ * Fails closed like the hooks (see {@link SCRUB_FAILED_TAG}).
+ */
+export function scrubSentryEvent<E extends SentryEventLike>(event: E): E {
+  try {
+    return scrubEvent(event);
+  } catch {
+    return failClosed(event);
+  }
+}
+
+/**
  * `beforeSendTransaction` counterpart: a transaction carries the same request
  * (`url` with `?token=…`), contexts and breadcrumbs as an error, plus span
  * descriptions and span data (`http.query`, captured header attributes).
  */
 export function createSentryBeforeSendTransaction<E extends SentryEventLike>(): (event: E) => E {
-  return (event: E): E => {
-    try {
-      return scrubEvent(event);
-    } catch {
-      return failClosed(event);
-    }
-  };
+  return (event: E): E => scrubSentryEvent(event);
 }
 
 // Loose Sentry log shape (`beforeSendLog`).

@@ -87,7 +87,7 @@ const URL_CREDENTIALS = /\b([a-z][a-z0-9+.-]{1,20}:\/\/[^\s:/@]{0,256}:)[^\s@/]{
  * dumps, logfmt. Only QUOTED values: `Invalid token: expired` must survive.
  */
 const QUOTED_KV =
-  /(["']?)([A-Za-z_À-ɏ][\w.À-ɏ-]{0,63})\1(\s*[:=]\s*)("(?:[^"\\\n]|\\.){0,4096}"|'(?:[^'\\\n]|\\.){0,4096}')/g;
+  /(["']?)([A-Za-z_\u00C0-\u024F][\w.\u00C0-\u024F-]{0,63})\1(\s*[:=]\s*)("(?:[^"\\\n]|\\.){0,4096}"|'(?:[^'\\\n]|\\.){0,4096}')/g;
 
 /** `?token=…`, `&code=…`, `#access_token=…`, form bodies, `a=1; b=2`. */
 const PARAM_KV = /(^|[?&#;,\s])([A-Za-z0-9_.[\]-]{1,64})=([^&#\s"'`<>;,]{0,8192})/g;
@@ -176,7 +176,7 @@ const ERROR_CODE_VALUE = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/;
  * PII keys too common in code and SQL to apply with any separator:
  * `name: "Jean"` (a dump) is data, `"name" = 'Chair'` (SQL) is code.
  */
-const BROAD_PII_KEYS = new Set(["name", "description", "location", "city"]);
+const BROAD_PII_KEYS = new Set(["name", "description", "location", "city", "nom", "ville", "commune"]);
 
 function normaliseName(name: string): string {
   return foldKey(name).replace(/[.[\]]/g, "");

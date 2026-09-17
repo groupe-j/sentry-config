@@ -27,10 +27,16 @@ This project follows [Semantic Versioning](https://semver.org/).
   La normalisation des clés replie désormais aussi les **accents** et les
   **espaces**, en plus de la casse, `_` et `-` : `Prénom`, `téléphone`,
   `Code Postal` et `raison_sociale` correspondent. Le motif texte
-  `"clé": "valeur"` accepte les clés accentuées (`"prénom": "Jean"`).
+  `"clé": "valeur"` accepte les clés accentuées (`"prénom": "Jean"`), mais
+  pas les clés contenant un espace : `{"Code Postal": "57000"}` est rédigé
+  comme objet (body parsé, `extra`, `contexts`), pas dans une chaîne (message,
+  body tronqué).
   Correspondance exacte après repli, jamais par sous-chaîne : `nombre`,
   `nomenclature`, `nomFichier`, `dénomination`, `communication` restent en
   clair (épinglé par test).
+  Comme `name` et `city`, `nom`, `ville` et `commune` ne sont rédigés dans du
+  texte qu'avec le séparateur `:` : `"nom" = 'Chaise'` dans une requête SQL
+  reste lisible (épinglé par test).
 
   Patch : plus de rédaction, aucune API retirée, aucun taux modifié. Coût
   pour une clé ASCII inchangé (la normalisation Unicode ne s'exécute que sur

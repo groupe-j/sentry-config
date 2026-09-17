@@ -265,6 +265,14 @@ describe("scrubText — clés françaises", () => {
     );
   });
 
+  it("keeps the broad French keys (`nom`, `ville`, `commune`) in SQL, like `name` and `city`", () => {
+    const sql = `SELECT * FROM "produit" WHERE "nom" = 'Chaise' AND "ville" = 'Metz' AND "commune" = 'Metz' ORDER BY "nom" ASC`;
+    expect(scrubText(sql)).toBe(sql);
+    expect(scrubText('data: { nom: "Dupont", ville: "Metz", commune: "Metz" }')).toBe(
+      'data: { nom: "[redacted]", ville: "[redacted]", commune: "[redacted]" }',
+    );
+  });
+
   it("redacts them in an ORM dump and a form body", () => {
     expect(scrubText('data: { nom: "Dupont", ville: "Metz", siret: "12345678900012", nombre: "3" }')).toBe(
       'data: { nom: "[redacted]", ville: "[redacted]", siret: "[redacted]", nombre: "3" }',

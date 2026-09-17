@@ -528,7 +528,12 @@ Sentry.init({
 
 App-level wrappers such as `toSentrySafeError` become redundant for events that
 go through these hooks; they still matter for anything logged **outside**
-Sentry (`console.error` to Vercel logs). Not covered: tokens in URL **paths**
+Sentry (`console.error` to Vercel logs). The hooks keep `contexts.runtime.name`
+and `contexts.os.name` readable when they hold a value the SDK itself writes
+("node", "vercel-edge", "Linux", "Windows"…), so the `runtime.name` and `os.name`
+tags stay usable for triage. Any other value there — an app's
+`setContext("os", { name })` — and `name` anywhere else, `browser`/`device`
+contexts included, is still `[REDACTED]` (DECISIONS.md §18). Not covered: tokens in URL **paths**
 (`/invite/<token>`), unquoted values in dumps, and PII with no recognisable
 shape (a name or street address in a free-text message) — see DECISIONS.md §17.
 

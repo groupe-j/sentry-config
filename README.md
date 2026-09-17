@@ -7,6 +7,7 @@ Shared Sentry configuration with battle-tested PII redaction. Extracted from `ri
 ## What this gives you
 
 - **PII redaction** by key-name (predictable, visible as `[REDACTED]`) — handles passport, idCard, nationalId, addresses, emails, payment data
+- **PII scrubbing inside free text** — exception messages (Drizzle `params:`, Postgres `Key (…)=(…)`, Prisma argument dumps), JSON-string request bodies, `request.url` / `query_string` / cookies, breadcrumb messages, span descriptions and log lines: the **value** becomes `[redacted]`, the SQL and the diagnosis stay. Wired into `beforeSend`, `beforeSendTransaction` and `beforeSendLog` by the init helpers; fails closed (minimal event tagged `pii_scrub_failed`) if scrubbing throws
 - **Header scrubbing** for webhook signatures (Stripe, Knock, Telegram, Sanity, Vercel)
 - **Multi-tenant app tagging** via `beforeSend` for cross-app dashboards
 - **Smart sampling**: 10% prod / 100% dev / 0% test, with health endpoint and static assets excluded
@@ -476,6 +477,44 @@ import { redact, scrubHeaders } from '@groupe-j/sentry-config';
 
 const cleaned = redact(myEvent);
 ```
+
+### PII inside messages, bodies and URLs
+
+Key-name redaction cannot see a value that lives **inside a string**. The init
+helpers therefore also install value-level scrubbing (`src/scrub.ts`):
+
+| Source | Before | Sent |
+|---|---|---|
+| `DrizzleQueryError` | `…where "key" = $1` + `params: magic-link:jean@x.fr` | `…where "key" = $1` + `params: [redacted]` |
+| Postgres `detail` | `Key (email)=(jean@x.fr) already exists.` | `Key (email)=([redacted]) already exists.` |
+| Prisma dump | `email: "jean@x.fr", role: "MEMBER"` | `email: "[redacted]", role: "MEMBER"` |
+| `request.url` | `/api/auth/magic-link/verify?token=Zk3p…&callbackURL=%2F` | `…?token=[redacted]&callbackURL=%2F` |
+| `request.data` (JSON string) | `{"email":"jean@x.fr","callbackURL":"/"}` | `{"email":"[REDACTED]","callbackURL":"/"}` |
+
+If you call `Sentry.init` yourself rather than the helpers, wire all three:
+
+```ts
+import {
+  createSentryBeforeSend,
+  createSentryBeforeSendTransaction,
+  createSentryBeforeSendLog,
+} from '@groupe-j/sentry-config';
+
+Sentry.init({
+  beforeSend: createSentryBeforeSend('my-app'),
+  beforeSendTransaction: createSentryBeforeSendTransaction(),
+  beforeSendLog: createSentryBeforeSendLog(),
+});
+```
+
+An app that keeps its own `beforeSend` composes the scrubbing after it with
+`scrubSentryEvent(event)` (no app tag, same fail-closed behaviour).
+
+App-level wrappers such as `toSentrySafeError` become redundant for events that
+go through these hooks; they still matter for anything logged **outside**
+Sentry (`console.error` to Vercel logs). Not covered: tokens in URL **paths**
+(`/invite/<token>`), unquoted values in dumps, and PII with no recognisable
+shape (a name or street address in a free-text message) — see DECISIONS.md §17.
 
 ## Required env vars
 

@@ -11,7 +11,11 @@
  */
 
 import * as Sentry from "@sentry/nextjs";
-import { createSentryBeforeSend } from "./before-send.js";
+import {
+  createSentryBeforeSend,
+  createSentryBeforeSendLog,
+  createSentryBeforeSendTransaction,
+} from "./before-send.js";
 import { DEFAULT_IGNORED_ERRORS } from "./ignored.js";
 import {
   SENTRY_ENABLED,
@@ -129,6 +133,8 @@ export function initSentryServer(opts: InitSentryServerOptions): void {
     ignoreErrors: [...DEFAULT_IGNORED_ERRORS, ...ignoreErrors],
     integrations: integrations as Parameters<typeof Sentry.init>[0]["integrations"],
     beforeSend: createSentryBeforeSend(app),
+    beforeSendTransaction: createSentryBeforeSendTransaction(),
+    beforeSendLog: createSentryBeforeSendLog(),
     _experiments: { enableLogs: true },
     // Opt-in transport override (getsentry/sentry-javascript#18871). Only spread
     // when provided so the SDK default is preserved for healthy setups.

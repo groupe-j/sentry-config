@@ -323,7 +323,8 @@ Three things it gets right, each of which is easy to get wrong:
 
 `options` also takes `level` (default `"warning"`) and `extra`. The optional
 `headers` are run through `scrubHeaders` before attachment, so credential headers
-(`authorization`, `cookie`, webhook signatures) are dropped while the rest stay
+(`authorization`, `cookie`, webhook signatures, API-key headers — see
+[Credential headers](#credential-headers)) are dropped while the rest stay
 for debugging. One `captureMessage` per call — one signal, one capture.
 
 > **No `waitUntil`?** In a long-lived Node process (not frozen on response) the
@@ -477,6 +478,34 @@ import { redact, scrubHeaders } from '@groupe-j/sentry-config';
 
 const cleaned = redact(myEvent);
 ```
+
+#### Credential headers
+
+`event.request.headers` is attached **in full** by Sentry's `requestData`
+integration (`extractNormalizedRequestData` drops only `cookie` and client-IP
+headers), and the SDK's key/token filter (`SENSITIVE_KEY_SNIPPETS`, applied by
+`filterKeyValueData`) runs only in `httpHeadersToSpanAttributes` — on **span
+attributes**, never on events. Turning off `sendDefaultPii` does not help:
+`include.headers` is computed with `!== false`, and the non-PII default is
+`{ deny: … }`. Verified in `@sentry/core` 10.70.
+
+Headers that *are* a credential are therefore dropped by NAME, in
+`scrubHeaders`:
+
+`authorization` · `proxy-authorization` · `cookie` · `set-cookie` ·
+`stripe-signature` · `x-knock-signature` · `x-webhook-signature` ·
+`x-vercel-signature` · `x-sanity-webhook-signature` ·
+`x-telegram-bot-api-secret-token` · `x-api-key` · `api-key` · `x-auth-token` ·
+`x-access-token` · `x-vercel-protection-bypass`
+
+Matching folds case and separators (`X-API-Key` ≡ `X_API_KEY` ≡ `x-api-key`) and
+is **exact** — `x-request-id`, `user-agent`, `referer` and the rest stay, values
+scrubbed. The name is the only net here: an API key issued without a recognisable
+prefix is a bare random string that no value-level pattern can catch.
+
+Adding an entry: the header must **be** the secret. One that merely *carries* one
+(`referer` with a token in its query) stays — its value is scrubbed by
+`scrubText`, and dropping it would cost diagnosis.
 
 ### PII inside messages, bodies and URLs
 

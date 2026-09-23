@@ -3,6 +3,72 @@
 All notable changes to `@groupe-j/sentry-config` are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [1.3.4] - 2026-09-23
+
+### Fixed
+
+- **Les en-têtes qui SONT une clé d'API ne partent plus en clair dans Sentry**
+  (GRO-1548). `SENSITIVE_HEADERS` ne portait ni `x-api-key` ni ses voisins :
+  tout dépôt qui expose une API authentifiée par clé publiait la clé **en
+  clair** dans chaque event levé pendant la requête — conservée 90 jours,
+  lisible par tout membre de l'organisation Sentry.
+
+  Les maillons, relevés en revue de GRO-1548 (archicollab-t3, PR #1034) puis
+  **relus dans `@sentry/core` 10.70** :
+  - `extractNormalizedRequestData`
+    (`@sentry/core/build/cjs/integrations/requestdata.js`) recopie
+    `normalizedRequest.headers` **en bloc** dans `event.request.headers`, et
+    n'en retire que `cookie` et les en-têtes d'IP client. Aucun filtrage de
+    clé ni de jeton ;
+  - `scrubHeaderValues` ne supprime que les NOMS de `SENSITIVE_HEADERS`, puis
+    passe le reste à `scrubText`, qui ne reconnaît que des secrets à préfixe
+    connu (`sk_`, `whsec_`, `npg_`, `gh*_`, `xox*`, `AKIA`, `eyJ`…) ;
+  - `foldKey("x-api-key")` donne `xapikey`, absent de `SENSITIVE_KEYS` (qui
+    contient `apikey` — la variante sans tirets aurait été couverte, pas
+    celle-ci).
+
+  **Correction d'un détail du rapport d'origine**, qui envoyait le lecteur au
+  mauvais fichier : la liste de Sentry qui contient « key » n'est pas
+  `PII_HEADER_SNIPPETS` mais `SENSITIVE_KEY_SNIPPETS` (`auth`, `token`,
+  `secret`, `key`, `jwt`, `bearer`…). L'asymétrie, elle, est bien réelle :
+  cette liste n'est appliquée que par `filterKeyValueData`, appelé uniquement
+  depuis `httpHeadersToSpanAttributes` (`@sentry/core/build/cjs/utils/request.js`)
+  — donc sur les **attributs de span**, où `x-api-key` devient `[Filtered]`,
+  jamais sur les events. `PII_HEADER_SNIPPETS` vaut
+  `["forwarded", "-ip", "remote-", "via", "-user"]` et ne sert lui aussi qu'au
+  chemin span.
+
+  Corollaire à retenir : **couper `sendDefaultPii` ne retire pas les en-têtes
+  des events.** Il met `httpHeaders.request` à `{ deny: … }`, et
+  `include.headers` se calcule par `!== false` — donc vrai.
+
+  Une clé émise sans préfixe reconnaissable est une chaîne aléatoire nue :
+  aucun motif de valeur ne la rattrape, le **nom** de l'en-tête est le seul
+  filet. Ajoutés : `x-api-key`, `api-key`, `x-auth-token`, `x-access-token`
+  (conventions courantes d'une API à clé, AWS API Gateway compris) et
+  `x-vercel-protection-bypass` (le secret de contournement de Vercel
+  Deployment Protection, envoyé sur chaque requête e2e et staging du
+  portefeuille).
+
+  La correspondance passe de `toLowerCase()` à `foldKey()` — la même règle que
+  `SENSITIVE_KEYS` juste au-dessus dans le fichier : `X-API-Key` et `X_API_KEY`
+  tombent comme `x-api-key`. Correspondance **exacte après pliage**, jamais une
+  sous-chaîne.
+
+  **Rien d'autre ne bouge.** Un témoin couvre la non-régression : `user-agent`,
+  `content-type`, `accept`, `referer` et `x-request-id` ressortent intacts, et
+  `isBot` sait toujours lire le `user-agent` qui lui survit — le filtre
+  anti-bots des apps lit cet objet-là, le vider ferait passer tout le bruit des
+  crawlers pour du trafic réel.
+
+  Critère d'entrée dans la liste, documenté dans le code et le README :
+  l'en-tête doit **être** le secret. Un en-tête qui se contente d'en porter un
+  (`referer` avec un jeton en query) n'y entre pas — sa valeur est nettoyée par
+  `scrubText`, et le retirer coûterait du diagnostic.
+
+  Patch, aucune API changée : les apps en `^1.3.x` l'obtiennent à la prochaine
+  installation, sans toucher leur manifeste.
+
 ## [1.3.3] - 2026-09-17
 
 ### Fixed

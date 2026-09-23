@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { redact, isSensitive, REDACTED } from "./redaction.js";
+import { redact, isSensitive, scrubHeaders, REDACTED } from "./redaction.js";
+import { isBot } from "./bot.js";
 import { createSentryBeforeSend, createSentryBeforeSendTransaction, scrubSentryEvent } from "./before-send.js";
 
 describe("isSensitive — lead PII keys (M5, RGPD)", () => {
@@ -292,5 +293,55 @@ describe("SDK-written runtime/os names survive key-name redaction (GRO-1505)", (
     const reversed = beforeSend({ contexts: { alias: os, os } }) as WithContexts;
     expect(reversed.contexts.alias).toEqual({ name: REDACTED });
     expect(reversed.contexts.os).toBe(REDACTED);
+  });
+});
+
+describe("scrubHeaders — headers that ARE a credential (GRO-1548)", () => {
+  // Une clé d'API nue : aucun préfixe (`sk_`, `gh*_`, `eyJ`…) que `scrubText`
+  // saurait reconnaître dans la VALEUR. C'est la forme que produit `creerCle`
+  // d'archicollab-t3. Si le NOM de l'en-tête ne la fait pas tomber, rien ne la
+  // rattrape et elle part en clair dans Sentry, conservée 90 jours.
+  const CLE_NUE = "9f2c7ab41de84c05b6e3a7d8419c2f0e5b3a1c6d";
+
+  it("drops x-api-key — name AND value leave no trace", () => {
+    const out = scrubHeaders({ "x-api-key": CLE_NUE, accept: "text/html" });
+    expect(out).not.toHaveProperty("x-api-key");
+    expect(JSON.stringify(out)).not.toContain(CLE_NUE);
+  });
+
+  it("drops the other key/token conventions of the portfolio", () => {
+    const out = scrubHeaders({
+      "api-key": CLE_NUE,
+      "x-auth-token": CLE_NUE,
+      "x-access-token": CLE_NUE,
+      "x-vercel-protection-bypass": CLE_NUE,
+      accept: "text/html",
+    });
+    expect(out).toEqual({ accept: "text/html" });
+  });
+
+  it("matches whatever case and separators the header arrives in", () => {
+    expect(scrubHeaders({ "X-API-Key": CLE_NUE })).toEqual({});
+    expect(scrubHeaders({ X_API_KEY: CLE_NUE })).toEqual({});
+  });
+
+  // TÉMOIN. Un filtre trop large serait invisible : il ne casse rien à la
+  // compilation, il vide seulement l'objet que lisent les autres. Le filtre
+  // anti-bots d'archicollab lit `user-agent` DANS CET OBJET (`isBot`) — le
+  // retirer ferait passer tout le bruit des crawlers pour du trafic réel.
+  it("keeps every other header untouched, user-agent included", () => {
+    const survivants = {
+      "user-agent": "Mozilla/5.0 (Macintosh)",
+      "content-type": "application/json",
+      accept: "text/html",
+      referer: "https://app.example.com/dashboard",
+      "x-request-id": "req_01J9",
+    };
+    expect(scrubHeaders({ ...survivants, "x-api-key": CLE_NUE })).toEqual(survivants);
+  });
+
+  it("leaves isBot able to read the user-agent it survives on", () => {
+    const out = scrubHeaders({ "user-agent": "Googlebot/2.1", "x-api-key": CLE_NUE });
+    expect(isBot(out["user-agent"])).toBe(true);
   });
 });

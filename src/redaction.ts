@@ -165,6 +165,34 @@ export function redact(value: unknown, seen = new WeakSet<object>()): unknown {
 /**
  * Headers that are credentials by another name — strip them entirely.
  * They have no debug value once an error has fired.
+ *
+ * Le NOM est le seul filet pour un en-tête de ce genre : `scrubText` ne
+ * reconnaît que des secrets à préfixe connu (`sk_`, `gh*_`, `eyJ`…), et une clé
+ * d'API émise sans préfixe est une chaîne aléatoire nue qu'aucun motif ne
+ * rattrape.
+ *
+ * Le SDK ne protège pas ce chemin, relevé dans @sentry/core 10.70 (GRO-1548) :
+ * le filtrage par mot-clé (`SENSITIVE_KEY_SNIPPETS` — `auth`, `token`,
+ * `secret`, `key`, `jwt`, `bearer`… — appliqué par `filterKeyValueData`) ne
+ * tourne QUE dans `httpHeadersToSpanAttributes` (`utils/request.js`), donc sur
+ * les ATTRIBUTS DE SPAN. Le chemin EVENT est ailleurs :
+ * `extractNormalizedRequestData` (`integrations/requestdata.js`) recopie
+ * `normalizedRequest.headers` EN BLOC dans `event.request.headers`, et n'en
+ * retire que `cookie` et les en-têtes d'IP client. Aucun filtrage de clé.
+ *
+ * Et couper `sendDefaultPii` n'y change rien : il met `httpHeaders.request` à
+ * `{ deny: PII_HEADER_SNIPPETS }`, et `include.headers` se calcule par
+ * `!== false` — donc VRAI. (`PII_HEADER_SNIPPETS` vaut
+ * `["forwarded", "-ip", "remote-", "via", "-user"]` : ni « key » ni « token »,
+ * et lui aussi ne sert qu'au chemin span.)
+ *
+ * Absent d'ici, un en-tête de ce genre part donc en clair dans chaque event
+ * levé pendant la requête, conservé 90 jours et lisible par tout membre de
+ * l'organisation Sentry.
+ *
+ * Critère d'entrée : l'en-tête EST le secret. Un en-tête qui se contente d'en
+ * contenir un (`referer` avec un jeton en query) n'a rien à faire ici — sa
+ * VALEUR est nettoyée par `scrubText`, et le retirer coûterait du diagnostic.
  */
 const SENSITIVE_HEADERS = new Set([
   "stripe-signature",
@@ -177,12 +205,24 @@ const SENSITIVE_HEADERS = new Set([
   "proxy-authorization",
   "cookie",
   "set-cookie",
-]);
+  // Clés et jetons portés par un en-tête dédié : conventions courantes d'une
+  // API authentifiée par clé (AWS API Gateway, `/api/v1` d'archicollab-t3).
+  "x-api-key",
+  "api-key",
+  "x-auth-token",
+  "x-access-token",
+  // Secret de contournement de Vercel Deployment Protection : envoyé sur chaque
+  // requête e2e et staging du portefeuille.
+  "x-vercel-protection-bypass",
+].map(foldKey));
 
 export function scrubHeaders(headers: Record<string, string>): Record<string, string> {
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers)) {
-    if (!SENSITIVE_HEADERS.has(key.toLowerCase())) {
+    // `foldKey`, pas `toLowerCase` : même règle que `SENSITIVE_KEYS` au-dessus,
+    // donc `X-API-Key` et `X_API_KEY` tombent comme `x-api-key`. Correspondance
+    // EXACTE après pliage, jamais une sous-chaîne — `x-request-id` reste.
+    if (!SENSITIVE_HEADERS.has(foldKey(key))) {
       result[key] = value;
     }
   }

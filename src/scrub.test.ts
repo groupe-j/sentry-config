@@ -551,6 +551,22 @@ describe("createSentryBeforeSend — no PII leaves the process", () => {
     expect(out.request!.headers!["user-agent"]).toBe("Mozilla/5.0");
   });
 
+  it("drops the API key of an authenticated /api/v1 request, and keeps user-agent", () => {
+    // GRO-1548. `requestData` attache event.request.headers EN ENTIER. La clé
+    // est nue (aucun préfixe connu de `scrubText`) : seul le NOM de l'en-tête
+    // peut la faire tomber.
+    const CLE_NUE = "9f2c7ab41de84c05b6e3a7d8419c2f0e5b3a1c6d";
+    const out = beforeSend({
+      request: {
+        url: "https://www.example.com/api/v1/projects",
+        headers: { "x-api-key": CLE_NUE, "user-agent": "Mozilla/5.0", accept: "application/json" },
+      },
+      exception: { values: [{ type: "TRPCError", value: "FORBIDDEN" }] },
+    })!;
+    expect(JSON.stringify(out)).not.toContain(CLE_NUE);
+    expect(out.request!.headers).toEqual({ "user-agent": "Mozilla/5.0", accept: "application/json" });
+  });
+
   it("redacts client-IP headers, request.env.REMOTE_ADDR and mechanism data", () => {
     const out = beforeSend({
       request: {

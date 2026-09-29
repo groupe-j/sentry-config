@@ -378,6 +378,25 @@ describe("scrubHeaders — Sanity revalidation secret (GRO-1563)", () => {
     expect(scrubHeaders({ X_SANITY_WEBHOOK_SECRET: SECRET_NU })).toEqual({});
   });
 
+  // L'entrée `x-sanity-webhook-signature` existait depuis longtemps et donnait
+  // l'impression que la signature était couverte. Elle ne l'était pas : Sanity
+  // envoie `sanity-webhook-signature`, SANS `x-` (`SIGNATURE_HEADER_NAME` de
+  // `@sanity/webhook`). Correspondance exacte → les deux ne se rencontrent
+  // jamais. Ce test tient le VRAI nom ; il tombe si l'entrée disparaît.
+  it("drops the signature header Sanity actually sends, which carries no x- prefix", () => {
+    const SIGNATURE = "t=1700000000,v1=8f3c2b1a9d7e4c6f0b5a2e8d1c4f7a3b";
+    const out = scrubHeaders({
+      "sanity-webhook-signature": SIGNATURE,
+      "sanity-webhook-id": "wh_01J9",
+      accept: "application/json",
+    });
+    expect(out).not.toHaveProperty("sanity-webhook-signature");
+    expect(JSON.stringify(out)).not.toContain(SIGNATURE);
+    // Les en-têtes de diagnostic du même webhook survivent : c'est eux qui
+    // répondent « appel webhook ou appel humain ? ».
+    expect(out).toEqual({ "sanity-webhook-id": "wh_01J9", accept: "application/json" });
+  });
+
   // TÉMOIN. Sanity envoie aussi des en-têtes de diagnostic sur le même webhook.
   // Un filtre qui les emporterait rendrait la panne de revalidation
   // indiagnosticable, sans rien casser de visible.

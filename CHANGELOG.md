@@ -22,8 +22,26 @@ This project follows [Semantic Versioning](https://semver.org/).
   `scrubText` (`sk_`, `whsec_`, `eyJ`…) : le nom de l'en-tête était le seul
   filet, exactement comme pour `x-api-key` en 1.3.4.
 
-  Mécanisme identique à celui relevé en GRO-1548 et re-vérifié alors dans
-  `@sentry/core` 10.70 : `extractNormalizedRequestData` recopie
+- **L'en-tête de signature que Sanity envoie VRAIMENT est enfin couvert.**
+  Trouvé par la revue indépendante de ce correctif. `SENSITIVE_HEADERS` portait
+  `x-sanity-webhook-signature` depuis longtemps — un nom que **Sanity n'envoie
+  jamais** : `SIGNATURE_HEADER_NAME` de `@sanity/webhook` vaut
+  `sanity-webhook-signature`, **sans préfixe `x-`**. Les deux plient en
+  `xsanitywebhooksignature` et `sanitywebhooksignature` ; la correspondance
+  étant exacte, ils ne se rencontrent jamais. L'entrée historique donnait donc
+  une impression de couverture sans rien couvrir — et elle n'avait aucun test,
+  donc rien ne l'aurait signalé. Vérifié dans le code de
+  `JELEMENT/src/app/api/revalidate/route.ts`, qui importe
+  `SIGNATURE_HEADER_NAME` et le commente explicitement.
+
+  L'ancienne entrée est **conservée** (inoffensive, et une app a pu s'en
+  inspirer) ; le vrai nom est ajouté à côté. Gravité moindre que le secret nu —
+  une signature est un HMAC horodaté du corps, pas la clé partagée — mais la
+  fausse impression de couverture était identique.
+
+  Mécanisme identique à celui relevé en GRO-1548, re-vérifié alors dans
+  `@sentry/core` ≥ 10.70 et de nouveau en 10.75 :
+  `extractNormalizedRequestData` recopie
   `normalizedRequest.headers` **en bloc** dans `event.request.headers` et n'en
   retire que `cookie` et les en-têtes d'IP client. Toute erreur levée pendant un
   POST `/api/revalidate` publiait donc le secret, conservé 90 jours et lisible

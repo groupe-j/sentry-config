@@ -3,6 +3,46 @@
 All notable changes to `@groupe-j/sentry-config` are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [1.3.5] - 2026-09-29
+
+### Fixed
+
+- **Le secret de revalidation Sanity ne part plus en clair dans Sentry**
+  (GRO-1563). `SENSITIVE_HEADERS` portait `x-sanity-webhook-signature` mais pas
+  `x-sanity-webhook-**secret**` — or c'est `-secret` que le portefeuille envoie
+  réellement. La convention vient de `@groupe-j/blog-generator`
+  (`src/config.ts`, `src/generator.ts`), donc elle est présente dans les **six**
+  apps qui ont un blog : archicollab-t3, ridesamui-t3, JELEMENT, coraly,
+  pronostic, loulou-clean-services.
+
+  La correspondance de `SENSITIVE_HEADERS` étant **exacte après pliage**
+  (`foldKey`), la présence de `-signature` ne couvrait rien de `-secret` :
+  `foldKey("x-sanity-webhook-secret")` donne `xsanitywebhooksecret`, absent de
+  la liste. Et la valeur est une chaîne aléatoire **nue**, sans préfixe connu de
+  `scrubText` (`sk_`, `whsec_`, `eyJ`…) : le nom de l'en-tête était le seul
+  filet, exactement comme pour `x-api-key` en 1.3.4.
+
+  Mécanisme identique à celui relevé en GRO-1548 et re-vérifié alors dans
+  `@sentry/core` 10.70 : `extractNormalizedRequestData` recopie
+  `normalizedRequest.headers` **en bloc** dans `event.request.headers` et n'en
+  retire que `cookie` et les en-têtes d'IP client. Toute erreur levée pendant un
+  POST `/api/revalidate` publiait donc le secret, conservé 90 jours et lisible
+  par tout membre de l'organisation Sentry.
+
+  **Ce que ce correctif ne fait pas** : il n'efface rien de ce qui est déjà
+  stocké. Si des événements de ce chemin existent dans Sentry, c'est une
+  **rotation de `SANITY_REVALIDATE_SECRET`** qu'il faut, par projet, puis le
+  webhook côté Sanity Studio. Voir GRO-1563.
+
+  Critère d'entrée respecté : l'en-tête **est** le secret. Deux témoins de
+  non-régression : `-secret` et `-signature` sont épinglés comme **deux entrées
+  distinctes** (le test tombe si l'une disparaît), et les en-têtes de
+  diagnostic qui voyagent sur le même webhook (`user-agent`,
+  `content-type`, `x-request-id`) ressortent intacts.
+
+  Patch, aucune API changée : les apps en `^1.3.x` l'obtiennent à la prochaine
+  installation, sans toucher leur manifeste.
+
 ## [1.3.4] - 2026-09-23
 
 ### Fixed

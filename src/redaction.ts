@@ -214,6 +214,13 @@ const SENSITIVE_HEADERS = new Set([
   // Secret de contournement de Vercel Deployment Protection : envoyé sur chaque
   // requête e2e et staging du portefeuille.
   "x-vercel-protection-bypass",
+  // Secret de revalidation Sanity. ⚠️ À NE PAS CONFONDRE avec
+  // `x-sanity-webhook-signature` ci-dessus : ce sont DEUX en-têtes distincts,
+  // et c'est `-secret` que le portefeuille envoie réellement — la convention
+  // vient de `@groupe-j/blog-generator`, donc elle est présente dans les six
+  // apps qui ont un blog. La correspondance étant exacte après pliage,
+  // `-signature` ne couvrait pas `-secret` : le secret partait en clair.
+  "x-sanity-webhook-secret",
 ].map(foldKey));
 
 export function scrubHeaders(headers: Record<string, string>): Record<string, string> {

@@ -496,7 +496,7 @@ Headers that *are* a credential are therefore dropped by NAME, in
 `stripe-signature` · `x-knock-signature` · `x-webhook-signature` ·
 `x-vercel-signature` · `x-sanity-webhook-signature` ·
 `x-telegram-bot-api-secret-token` · `x-api-key` · `api-key` · `x-auth-token` ·
-`x-access-token` · `x-vercel-protection-bypass`
+`x-access-token` · `x-vercel-protection-bypass` · `x-sanity-webhook-secret`
 
 Matching folds case and separators (`X-API-Key` ≡ `X_API_KEY` ≡ `x-api-key`) and
 is **exact** — `x-request-id`, `user-agent`, `referer` and the rest stay, values

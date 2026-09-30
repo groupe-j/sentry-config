@@ -21,7 +21,7 @@
  * adversarial 100 KB string stays linear (pinned by `scrub.test.ts`).
  */
 
-import { REDACTED, foldKey, isSensitive } from "./redaction.js";
+import { REDACTED, foldKey, hasCredentialSuffix, isSensitive } from "./redaction.js";
 
 /**
  * Marker for a value scrubbed out of free text. Lower-case on purpose: it tells
@@ -191,14 +191,9 @@ export function isSecretName(name: string): boolean {
   if (isSensitive(name)) return true;
   const n = normaliseName(name);
   if (SECRET_PARAMS.has(n)) return true;
-  return (
-    n.endsWith("token") ||
-    n.endsWith("secret") ||
-    n.endsWith("password") ||
-    n.endsWith("signature") ||
-    n.endsWith("credential") ||
-    n.startsWith("magic")
-  );
+  // `hasCredentialSuffix` reçoit `n`, DÉJÀ normalisé par `normaliseName` —
+  // c'est ce qui préserve `user[token]`. Voir son contrat d'entrée.
+  return hasCredentialSuffix(n) || n.startsWith("magic");
 }
 
 /**

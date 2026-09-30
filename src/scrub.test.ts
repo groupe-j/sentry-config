@@ -355,6 +355,26 @@ describe("isSecretName / isSecretParam", () => {
     expect(isSecretParam("token", REDACTED_VALUE)).toBe(false);
     expect(isSecretParam("code", "500")).toBe(false);
   });
+
+  // CARACTÉRISATION. Ces verdicts sont ceux d'AVANT l'extraction de
+  // `hasCredentialSuffix` : ils épinglent le comportement pour prouver que la
+  // refactorisation ne le change pas. `user[token]` est le cas qui compte —
+  // `isSecretName` doit continuer de normaliser avec `normaliseName`, qui
+  // retire `.` `[` `]`. S'il passait `foldKey(name)` au prédicat, ce nom ne
+  // finirait plus par `token` et cesserait d'être reconnu.
+  it.each([
+    ["user[token]", true],
+    ["refresh_token", true],
+    ["requestToken", true],
+    ["x-amz-credential", true],
+    ["magicLink", true],
+    ["ipAddress", false],
+    ["firstNamespace", false],
+    ["x-cache-key", false],
+    ["x-idempotency-key", false],
+  ])("isSecretName(%s) === %s, before and after the extraction", (nom, attendu) => {
+    expect(isSecretName(nom)).toBe(attendu);
+  });
 });
 
 // ─── Request parts ─────────────────────────────────────────────────────────

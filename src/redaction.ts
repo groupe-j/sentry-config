@@ -163,6 +163,44 @@ export function redact(value: unknown, seen = new WeakSet<object>()): unknown {
 }
 
 /**
+ * Suffixes de nom qui désignent un credential, quel que soit le contexte.
+ *
+ * ⚠️ `key` N'Y FIGURE PAS, délibérément. Il emporterait `x-idempotency-key` —
+ * précisément l'en-tête qu'on veut lire dans Sentry pour déboguer un double
+ * paiement, et le portefeuille a un `@groupe-j/stripe` avec un
+ * `src/idempotency.ts` dédié — ainsi que `x-cache-key` et `x-cache-status`,
+ * qui sont du diagnostic. Les clés d'API sont couvertes NOMMÉMENT, dans
+ * `SENSITIVE_KEYS` et `SENSITIVE_HEADERS`.
+ */
+const CREDENTIAL_SUFFIXES = ["token", "secret", "password", "signature", "credential"] as const;
+
+/**
+ * Vrai si le nom finit par un suffixe de credential.
+ *
+ * ⚠️ CONTRAT D'ENTRÉE : `nomNormalise` doit être DÉJÀ normalisé, et c'est à
+ * l'appelant de choisir LE BON normaliseur. Ce n'est pas une coquetterie :
+ *
+ *   • `isSecretName` (paramètres d'URL, formulaires) doit passer par
+ *     `normaliseName`, qui retire `.` `[` `]` en plus de ce que fait
+ *     `foldKey` — sans quoi `user[token]` ne finit pas par `token` et cesse
+ *     d'être reconnu ;
+ *   • `scrubHeaders` (en-têtes HTTP) passe par `foldKey`, suffisant là où les
+ *     noms n'ont ni point ni crochet.
+ *
+ * Normaliser ICI ne protégerait de rien : `foldKey` est idempotent sur une
+ * chaîne déjà pliée, et il ne retire pas les crochets — un appelant qui
+ * sous-normalise resterait cassé. La responsabilité est donc chez l'appelant,
+ * et un test de caractérisation la tient : passer `foldKey(name)` au lieu de
+ * `n` dans `isSecretName` fait tomber `user[token]`.
+ *
+ * Pas exporté depuis `index.ts` : ce contrat est un piège pour un appelant
+ * externe.
+ */
+export function hasCredentialSuffix(nomNormalise: string): boolean {
+  return CREDENTIAL_SUFFIXES.some((suffixe) => nomNormalise.endsWith(suffixe));
+}
+
+/**
  * Headers that are credentials by another name — strip them entirely.
  * They have no debug value once an error has fired.
  *

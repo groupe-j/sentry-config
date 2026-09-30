@@ -567,6 +567,29 @@ describe("createSentryBeforeSend — no PII leaves the process", () => {
     expect(out.request!.headers).toEqual({ "user-agent": "Mozilla/5.0", accept: "application/json" });
   });
 
+  it("drops the Sanity revalidation secret of a failing /api/revalidate POST", () => {
+    // GRO-1563. Même mécanisme que GRO-1548 : `requestData` recopie
+    // event.request.headers EN ENTIER, et le secret est nu. C'est le chemin
+    // réel — une erreur levée pendant la revalidation d'un article.
+    const SECRET_NU = "k3n8Pq2wRt7vZx1mLb4c";
+    const out = beforeSend({
+      request: {
+        url: "https://www.example.com/api/revalidate",
+        headers: {
+          "x-sanity-webhook-secret": SECRET_NU,
+          "user-agent": "Sanity-Webhook/1.0",
+          "content-type": "application/json",
+        },
+      },
+      exception: { values: [{ type: "Error", value: "revalidatePath failed" }] },
+    })!;
+    expect(JSON.stringify(out)).not.toContain(SECRET_NU);
+    expect(out.request!.headers).toEqual({
+      "user-agent": "Sanity-Webhook/1.0",
+      "content-type": "application/json",
+    });
+  });
+
   it("redacts client-IP headers, request.env.REMOTE_ADDR and mechanism data", () => {
     const out = beforeSend({
       request: {

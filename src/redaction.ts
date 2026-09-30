@@ -214,6 +214,26 @@ const SENSITIVE_HEADERS = new Set([
   // Secret de contournement de Vercel Deployment Protection : envoyé sur chaque
   // requête e2e et staging du portefeuille.
   "x-vercel-protection-bypass",
+  // ── Webhooks Sanity : TROIS en-têtes, et il en manquait DEUX ─────────────
+  //
+  // ⚠️ `x-sanity-webhook-signature` (plus haut) est une entrée MORTE. Sanity
+  // n'envoie jamais ce nom-là : `SIGNATURE_HEADER_NAME` de `@sanity/webhook`
+  // vaut `sanity-webhook-signature`, SANS préfixe `x-`. Les deux plient
+  // respectivement en `xsanitywebhooksignature` et `sanitywebhooksignature` :
+  // la correspondance étant exacte, ils ne se rencontrent jamais. L'entrée
+  // historique donnait donc une impression de couverture sans rien couvrir.
+  // On garde l'ancienne (inoffensive, et une app a pu s'en inspirer) et on
+  // ajoute le vrai nom.
+  "sanity-webhook-signature",
+  //
+  // Et le secret de revalidation MAISON, à ne pas confondre avec la signature :
+  // ce sont deux mécanismes distincts. La signature est un HMAC horodaté du
+  // corps ; le secret, lui, est le secret partagé en clair. C'est `-secret` que
+  // le portefeuille envoie le plus souvent — la convention vient de
+  // `@groupe-j/blog-generator` (`headerName`, dont c'est le défaut), donc elle
+  // est présente dans les six apps qui ont un blog. Là encore, `-signature` ne
+  // couvrait pas `-secret` : le secret partait en clair.
+  "x-sanity-webhook-secret",
 ].map(foldKey));
 
 export function scrubHeaders(headers: Record<string, string>): Record<string, string> {

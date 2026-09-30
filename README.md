@@ -494,9 +494,15 @@ Headers that *are* a credential are therefore dropped by NAME, in
 
 `authorization` · `proxy-authorization` · `cookie` · `set-cookie` ·
 `stripe-signature` · `x-knock-signature` · `x-webhook-signature` ·
-`x-vercel-signature` · `x-sanity-webhook-signature` ·
-`x-telegram-bot-api-secret-token` · `x-api-key` · `api-key` · `x-auth-token` ·
-`x-access-token` · `x-vercel-protection-bypass`
+`x-vercel-signature` · `x-telegram-bot-api-secret-token` · `x-api-key` ·
+`api-key` · `x-auth-token` · `x-access-token` · `x-vercel-protection-bypass`
+
+Webhooks Sanity — **three** distinct headers, kept adjacent on purpose:
+`sanity-webhook-signature` (the real one `@sanity/webhook` sends — no `x-`
+prefix) · `x-sanity-webhook-signature` (legacy, kept but matches nothing Sanity
+sends) · `x-sanity-webhook-secret` (the shared secret, the convention
+`@groupe-j/blog-generator` defaults to). Matching is exact, so none of the three
+covers another.
 
 Matching folds case and separators (`X-API-Key` ≡ `X_API_KEY` ≡ `x-api-key`) and
 is **exact** — `x-request-id`, `user-agent`, `referer` and the rest stay, values

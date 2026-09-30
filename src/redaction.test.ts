@@ -345,3 +345,67 @@ describe("scrubHeaders — headers that ARE a credential (GRO-1548)", () => {
     expect(isBot(out["user-agent"])).toBe(true);
   });
 });
+
+describe("scrubHeaders — Sanity revalidation secret (GRO-1563)", () => {
+  // Le secret de revalidation tel que `@groupe-j/blog-generator` le fait
+  // envoyer : une chaîne aléatoire NUE, sans préfixe que `scrubText` sache
+  // reconnaître. Comme pour une clé d'API, le NOM de l'en-tête est le seul
+  // filet.
+  const SECRET_NU = "k3n8Pq2wRt7vZx1mLb4c";
+
+  it("drops x-sanity-webhook-secret — name AND value leave no trace", () => {
+    const out = scrubHeaders({ "x-sanity-webhook-secret": SECRET_NU, accept: "application/json" });
+    expect(out).not.toHaveProperty("x-sanity-webhook-secret");
+    expect(JSON.stringify(out)).not.toContain(SECRET_NU);
+  });
+
+  // ⚠️ LE TEST QUI COMPTE. `-signature` était dans la liste depuis longtemps et
+  // donnait l'impression que « le webhook Sanity est couvert ». Il ne l'était
+  // pas : la correspondance est EXACTE après pliage, donc `-signature` ne dit
+  // rien de `-secret`, et c'est `-secret` que les apps envoient réellement.
+  // Ce test tombe si l'un des deux disparaît de la liste.
+  it("treats -secret and -signature as two distinct entries, both dropped", () => {
+    const out = scrubHeaders({
+      "x-sanity-webhook-secret": SECRET_NU,
+      "x-sanity-webhook-signature": "sha256=abc123",
+      accept: "application/json",
+    });
+    expect(out).toEqual({ accept: "application/json" });
+  });
+
+  it("matches whatever case and separators the header arrives in", () => {
+    expect(scrubHeaders({ "X-Sanity-Webhook-Secret": SECRET_NU })).toEqual({});
+    expect(scrubHeaders({ X_SANITY_WEBHOOK_SECRET: SECRET_NU })).toEqual({});
+  });
+
+  // L'entrée `x-sanity-webhook-signature` existait depuis longtemps et donnait
+  // l'impression que la signature était couverte. Elle ne l'était pas : Sanity
+  // envoie `sanity-webhook-signature`, SANS `x-` (`SIGNATURE_HEADER_NAME` de
+  // `@sanity/webhook`). Correspondance exacte → les deux ne se rencontrent
+  // jamais. Ce test tient le VRAI nom ; il tombe si l'entrée disparaît.
+  it("drops the signature header Sanity actually sends, which carries no x- prefix", () => {
+    const SIGNATURE = "t=1700000000,v1=8f3c2b1a9d7e4c6f0b5a2e8d1c4f7a3b";
+    const out = scrubHeaders({
+      "sanity-webhook-signature": SIGNATURE,
+      "sanity-webhook-id": "wh_01J9",
+      accept: "application/json",
+    });
+    expect(out).not.toHaveProperty("sanity-webhook-signature");
+    expect(JSON.stringify(out)).not.toContain(SIGNATURE);
+    // Les en-têtes de diagnostic du même webhook survivent : c'est eux qui
+    // répondent « appel webhook ou appel humain ? ».
+    expect(out).toEqual({ "sanity-webhook-id": "wh_01J9", accept: "application/json" });
+  });
+
+  // TÉMOIN. Sanity envoie aussi des en-têtes de diagnostic sur le même webhook.
+  // Un filtre qui les emporterait rendrait la panne de revalidation
+  // indiagnosticable, sans rien casser de visible.
+  it("keeps the diagnostic headers that travel with the same webhook", () => {
+    const survivants = {
+      "user-agent": "Sanity-Webhook/1.0",
+      "content-type": "application/json",
+      "x-request-id": "req_01J9",
+    };
+    expect(scrubHeaders({ ...survivants, "x-sanity-webhook-secret": SECRET_NU })).toEqual(survivants);
+  });
+});

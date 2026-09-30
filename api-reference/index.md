@@ -1180,7 +1180,7 @@ Key-name redaction AND value scrubbing, recursively. Returns new containers
 
 > **scrubHeaders**(`headers`): `Record`\<`string`, `string`\>
 
-Defined in: [redaction.ts:219](https://github.com/groupe-j/sentry-config/blob/main/src/redaction.ts#L219)
+Defined in: [redaction.ts:239](https://github.com/groupe-j/sentry-config/blob/main/src/redaction.ts#L239)
 
 #### Parameters
 

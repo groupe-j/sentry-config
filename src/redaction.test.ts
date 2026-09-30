@@ -409,3 +409,81 @@ describe("scrubHeaders — Sanity revalidation secret (GRO-1563)", () => {
     expect(scrubHeaders({ ...survivants, "x-sanity-webhook-secret": SECRET_NU })).toEqual(survivants);
   });
 });
+
+describe("scrubHeaders — credential-suffix rule (1.4.0)", () => {
+  const SECRET_NU = "k3n8Pq2wRt7vZx1mLb4c";
+
+  // Six credentials authentiques, dans AUCUNE liste avant 1.4.0. Mesures a
+  // l'appui : ils partaient en clair.
+  it.each([
+    "x-csrf-token",
+    "x-xsrf-token",
+    "x-amz-signature",
+    "x-amz-credential",
+    "x-amz-security-token",
+    "x-goog-signature",
+  ])("marks %s as [REDACTED] and keeps its key", (nom) => {
+    const out = scrubHeaders({ [nom]: SECRET_NU, accept: "application/json" });
+    expect(out[nom]).toBe(REDACTED);
+    expect(JSON.stringify(out)).not.toContain(SECRET_NU);
+    // La cle SURVIT : c'est ce qui rend la prise visible, donc contestable.
+    expect(Object.keys(out)).toContain(nom);
+  });
+
+  it("folds case and separators like the exact list does", () => {
+    expect(scrubHeaders({ "X-CSRF-Token": SECRET_NU })["X-CSRF-Token"]).toBe(REDACTED);
+    expect(scrubHeaders({ X_CSRF_TOKEN: SECRET_NU }).X_CSRF_TOKEN).toBe(REDACTED);
+  });
+
+  // ⚠️ LA PRECEDENCE. Dix entrees de SENSITIVE_HEADERS finissent DEJA par un
+  // suffixe de credential. Si le suffixe passait avant la liste exacte, elles
+  // cesseraient d'etre SUPPRIMEES pour n'etre plus que MARQUEES : un
+  // affaiblissement de la couverture existante, livre comme une amelioration.
+  it.each([
+    "stripe-signature",
+    "x-knock-signature",
+    "x-sanity-webhook-secret",
+    "sanity-webhook-signature",
+    "x-auth-token",
+    "x-access-token",
+  ])("keeps DELETING %s — the exact list wins over the suffix rule", (nom) => {
+    const out = scrubHeaders({ [nom]: SECRET_NU, accept: "application/json" });
+    expect(out).not.toHaveProperty(nom);
+    expect(out).toEqual({ accept: "application/json" });
+  });
+
+  // ⚠️ LE TEMOIN LE PLUS IMPORTANT DU FICHIER.
+  //
+  // `location` figure dans les cles PII (au sens « lieu d'une personne »), donc
+  // `isSensitive("location")` est VRAI. Or `Location` est l'en-tete HTTP
+  // standard qui porte la cible d'une redirection. Brancher `isSecretName` — ou
+  // `isSensitive` — sur le chemin des en-tetes supprimerait le Location de
+  // toute reponse 3xx.
+  //
+  // Ce test ne garde pas une fonctionnalite : il garde une ERREUR DE CONCEPTION
+  // FERMEE. Le jour ou quelqu'un trouvera plus court d'appeler isSecretName ici,
+  // il tombera et lui dira pourquoi. Voir DECISIONS.md §19.
+  it("keeps Location — the header path must never consult the PII keys", () => {
+    const out = scrubHeaders({ location: "https://app.example.com/dashboard" });
+    expect(out.location).toBe("https://app.example.com/dashboard");
+  });
+
+  it("keeps the diagnostic headers a suffix rule could plausibly eat", () => {
+    const survivants = {
+      "x-idempotency-key": "idem_01J9",
+      "x-cache-key": "home-v3",
+      "x-cache-status": "HIT",
+      "content-location": "/fr/accueil",
+      etag: 'W/"abc123"',
+      "x-request-id": "req_01J9",
+      "x-vercel-id": "cdg1::abc",
+      "user-agent": "Mozilla/5.0 (Macintosh)",
+    };
+    expect(scrubHeaders({ ...survivants })).toEqual(survivants);
+  });
+
+  it("leaves isBot able to read the user-agent it survives on", () => {
+    const out = scrubHeaders({ "user-agent": "Googlebot/2.1", "x-csrf-token": SECRET_NU });
+    expect(isBot(out["user-agent"])).toBe(true);
+  });
+});

@@ -278,11 +278,28 @@ export function scrubHeaders(headers: Record<string, string>): Record<string, st
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers)) {
     // `foldKey`, pas `toLowerCase` : même règle que `SENSITIVE_KEYS` au-dessus,
-    // donc `X-API-Key` et `X_API_KEY` tombent comme `x-api-key`. Correspondance
-    // EXACTE après pliage, jamais une sous-chaîne — `x-request-id` reste.
-    if (!SENSITIVE_HEADERS.has(foldKey(key))) {
-      result[key] = value;
-    }
+    // donc `X-API-Key` et `X_API_KEY` tombent comme `x-api-key`.
+    const folded = foldKey(key);
+
+    // ── 1. LISTE EXACTE, EN PREMIER ─────────────────────────────────────────
+    // L'ORDRE EST SIGNIFIANT. Dix entrées de `SENSITIVE_HEADERS` finissent déjà
+    // par un suffixe de credential (`stripe-signature`, `x-auth-token`,
+    // `x-sanity-webhook-secret`…). Si le suffixe était évalué avant, elles
+    // cesseraient d'être SUPPRIMÉES pour n'être plus que MARQUÉES — un
+    // affaiblissement de la couverture existante, livré comme une amélioration.
+    // Épinglé par `redaction.test.ts`.
+    if (SENSITIVE_HEADERS.has(folded)) continue;
+
+    // ── 2. RÈGLE DE FORME ───────────────────────────────────────────────────
+    // Attrapé par son SUFFIXE, pas par son nom : on MARQUE au lieu de
+    // supprimer. Asymétrie assumée (DECISIONS.md §19). Une règle de forme trop
+    // large est invisible si elle supprime — l'objet est seulement plus petit,
+    // et personne ne sait pourquoi. Le marqueur rend la prise contestable.
+    //
+    // ⚠️ `hasCredentialSuffix`, JAMAIS `isSecretName` : celui-ci commence par
+    // `isSensitive`, qui consulte les clés PII — où figure `location`, l'en-tête
+    // standard d'une redirection.
+    result[key] = hasCredentialSuffix(folded) ? REDACTED : value;
   }
   return result;
 }

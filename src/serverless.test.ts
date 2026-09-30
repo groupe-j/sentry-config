@@ -159,6 +159,21 @@ describe("signalServerless", () => {
     expect(headers).toEqual({ "content-type": "application/json" });
   });
 
+  it("applies the credential-suffix rule to the headers it attaches to extra", async () => {
+    // Câblage : le second appelant de `scrubHeaders`. Le vrai `scrubHeaders`
+    // tourne (redaction.js n'est pas mocké) : la clé reste, la valeur est marquée.
+    const SECRET_NU = "k3n8Pq2wRt7vZx1mLb4c";
+    const { signalServerless } = await loadServerless();
+
+    signalServerless("revalidation refusee", vi.fn(), {
+      headers: { "x-csrf-token": SECRET_NU, "x-request-id": "req_01J9" },
+    });
+
+    const headers = capturedContext().extra?.headers as Record<string, string>;
+    expect(headers).toEqual({ "x-csrf-token": "[REDACTED]", "x-request-id": "req_01J9" });
+    expect(JSON.stringify(capturedContext())).not.toContain(SECRET_NU);
+  });
+
   it("still flushes even when no extra or headers are given", async () => {
     const { signalServerless } = await loadServerless();
     const { defer, handed } = recordingDefer();

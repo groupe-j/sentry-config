@@ -619,6 +619,38 @@ describe("createSentryBeforeSend — no PII leaves the process", () => {
     });
   });
 
+  it("marks a credential-suffix header inside a real event, and leaves it alone on a second pass", () => {
+    // Câblage : `scrubHeaders` a deux appelants, et celui-ci (before-send) doit
+    // recevoir la règle de suffixe. La clé est conservée, la valeur est marquée.
+    const SECRET_NU = "k3n8Pq2wRt7vZx1mLb4c";
+    const evenement = {
+      request: {
+        url: "https://www.example.com/api/v1/projects",
+        headers: {
+          "x-csrf-token": SECRET_NU,
+          location: "https://www.example.com/apres-redirection",
+          "user-agent": "Mozilla/5.0",
+          "x-request-id": "req_01J9",
+        },
+      },
+      exception: { values: [{ type: "Error", value: "boom" }] },
+    };
+
+    const out = beforeSend(evenement)!;
+    expect(JSON.stringify(out)).not.toContain(SECRET_NU);
+    expect(out.request!.headers).toEqual({
+      "x-csrf-token": REDACTED,
+      location: "https://www.example.com/apres-redirection",
+      "user-agent": "Mozilla/5.0",
+      "x-request-id": "req_01J9",
+    });
+
+    // IDEMPOTENCE. Dans before-send, la valeur marquée traverse ENSUITE
+    // scrubText (scrubHeaderValues). Elle doit en ressortir intacte.
+    const deuxiemePasse = beforeSend(out)!;
+    expect(deuxiemePasse.request!.headers!["x-csrf-token"]).toBe(REDACTED);
+  });
+
   it("redacts client-IP headers, request.env.REMOTE_ADDR and mechanism data", () => {
     const out = beforeSend({
       request: {

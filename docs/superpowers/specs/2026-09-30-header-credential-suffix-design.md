@@ -60,7 +60,12 @@ aujourd'hui par aucune liste :
 > libre (`QUOTED_KV`) — vérifié sur v1.3.5, et cette énumération n'est pas
 > donnée pour exhaustive. Ce que ce changement ajoute, c'est **une surface de
 > plus** : `scrubHeaders`, le seul des chemins nettoyés par nom que les hooks
-> appliquent à un événement à n'avoir que la liste exacte. Sur le chemin
+> appliquent à un événement, **et pour une valeur de type chaîne**, à n'avoir
+> que la liste exacte. Cette restriction de type est mesurée, pas prudentielle :
+> pour une valeur non-chaîne, les clés d'objet n'ont elles aussi que la liste
+> exacte (`scrub.ts:369` passe avant le test de chaîne de `:372`) —
+> `scrubDeep({ authorization: 12345 })` rend `[REDACTED]`, quand
+> `scrubDeep({ "x-auth-token": 12345 })` reste inchangé. Sur le chemin
 > `extra`, où `scrubDeep` passe, les six ci-dessus étaient déjà marqués, et
 > `x-amz-credential` comme `x-amz-security-token` figurent nommément dans
 > `SECRET_PARAMS`. L'affirmation « dans aucune liste » n'est donc vraie de

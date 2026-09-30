@@ -17,11 +17,18 @@ This project follows [Semantic Versioning](https://semver.org/).
   (`scrubEntry`), aux paramètres d'URL (`isSecretParam`, deux sites) et aux
   paires à valeur **citée** dans du texte libre (`QUOTED_KV`) — mesuré sur
   v1.3.5, et cette énumération n'est pas donnée pour exhaustive. Des chemins
-  nettoyés **par nom** que les hooks appliquent à un événement, celui des
-  en-têtes était le seul à n'avoir que la liste exacte, et
-  `event.request.headers` ne reçoit pas `scrubDeep` (il reçoit `scrubHeaders`,
-  puis `scrubText` sur les valeurs). Liste des surfaces et de leur portée :
-  DECISIONS.md §19.
+  nettoyés **par nom** que les hooks appliquent à un événement, **et pour une
+  valeur de type chaîne**, celui des en-têtes était le seul à n'avoir que la
+  liste exacte, et `event.request.headers` ne reçoit pas `scrubDeep` (il reçoit
+  `scrubHeaders`, puis `scrubText` sur les valeurs).
+
+  La restriction au type **chaîne** n'est pas décorative : pour une valeur
+  non-chaîne, la surface des clés d'objet n'a elle aussi que la liste exacte,
+  parce que `scrub.ts:369` passe avant le test de chaîne de `:372`. Mesuré sur
+  1.4.0 : `scrubDeep({ authorization: 12345 })` rend `[REDACTED]`, mais
+  `scrubDeep({ "x-auth-token": 12345 })` reste **inchangé**.
+
+  Liste des surfaces et de leur portée : DECISIONS.md §19.
 
   Ferme donc six credentials **dans `event.request.headers`** :
   `x-csrf-token`, `x-xsrf-token`, `x-amz-signature`, `x-amz-credential`,

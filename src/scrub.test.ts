@@ -645,17 +645,23 @@ describe("createSentryBeforeSend — no PII leaves the process", () => {
       "x-request-id": "req_01J9",
     });
 
-    // Ce que tient le PREMIER passage : dans before-send, la valeur marquée par
-    // scrubHeaders traverse ENSUITE scrubText (scrubHeaderValues). Le `toEqual`
-    // ci-dessus établit que scrubText("[REDACTED]") rend la valeur intacte.
+    // IDEMPOTENCE — ce qui est MESURÉ, et rien de plus.
     //
-    // Le SECOND passage garde ce que le premier ne peut pas voir : le
-    // comportement de scrubHeaders sur une valeur DÉJÀ MARQUÉE. Il n'ajoute rien
-    // sur scrubText("[REDACTED]"), déjà établi par le premier. Ce qui lui
-    // échappe, ce sont les mutants de scrubHeaderValues — le premier passage les
-    // attrape avant lui. Et l'assertion ne regarde qu'UN seul en-tête
-    // (x-csrf-token) : la stabilité est vérifiée sur celui-là, pas sur
-    // l'événement entier.
+    // Premier passage : `scrubHeaders` marque `x-csrf-token`, puis la valeur
+    // traverse `scrubText` (`scrubHeaderValues`). Le `toEqual` ci-dessus établit
+    // donc que `scrubText("[REDACTED]")` rend la valeur intacte.
+    //
+    // Second passage : `beforeSend` reçoit son propre résultat. MESURÉ — deux
+    // mutants SANS état, l'un dans `scrubHeaders`, l'autre dans
+    // `scrubHeaderValues`, qui se comportent normalement sur une valeur brute et
+    // dévient sur une valeur déjà marquée, font tomber le `toBe` ci-dessous SEUL.
+    // Le second passage garde donc quelque chose que le premier ne voit pas.
+    //
+    // ⚠️ AUCUNE PRÉTENTION D'EXHAUSTIVITÉ. Trois formulations successives de ce
+    // commentaire ont voulu énumérer ce qui ÉCHAPPE à ce test ; les trois ont été
+    // réfutées par un contre-exemple écrit en une ligne. On n'énumère donc plus :
+    // ci-dessus est ce qui a été mesuré, pas une frontière. La portée de
+    // l'assertion du second passage est UN en-tête, `x-csrf-token`.
     const deuxiemePasse = beforeSend(out)!;
     expect(deuxiemePasse.request!.headers!["x-csrf-token"]).toBe(REDACTED);
   });

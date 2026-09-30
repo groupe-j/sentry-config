@@ -32,7 +32,7 @@ Ajouter une **règle de suffixe de credential** sur les noms d'en-têtes, **à c
 
 Suffixes retenus, repris à l'identique de `isSecretName` : `token`, `secret`, `password`, `signature`, `credential`.
 
-**`key` est délibérément exclu.** Il attraperait `x-idempotency-key` — précisément l'en-tête qu'on veut lire dans Sentry pour déboguer un double paiement, et le portefeuille a un paquet `@groupe-j/stripe` avec un `src/idempotency.ts` dédié. Il emporterait aussi `x-cache-key` et `x-cache-status`, qui sont du diagnostic. Les clés d'API restent couvertes **nommément** dans la liste exacte, où elles sont déjà.
+**`key` est délibérément exclu.** Il attraperait `x-idempotency-key` — précisément l'en-tête qu'on veut lire dans Sentry pour déboguer un double paiement, et le portefeuille a un paquet `@groupe-j/stripe` avec un `src/idempotency.ts` dédié. Il emporterait aussi `x-cache-key`, qui est du diagnostic. (`x-cache-status`, longtemps cité ici à ses côtés, ne serait PAS emporté : il plie en `xcachestatus` et finit par `status`.) Les clés d'API restent couvertes **nommément** dans la liste exacte, où elles sont déjà.
 
 ### Ce que la règle ferme, mesuré sur 70 en-têtes réels
 
@@ -49,7 +49,7 @@ Six credentials authentiques, aujourd'hui dans **aucune** liste :
 | `x-functions-key` | `key` exclu | clé Azure Functions |
 | `x-goog-api-key` | `key` exclu | clé Google API |
 
-**Ces quatre noms entrent donc dans la liste exacte, dans la même livraison.** Une règle qui ferme 6 trous sur 10 en laissant croire qu'elle ferme la classe reproduirait le défaut qu'on corrige.
+**Ces quatre noms entrent donc dans la liste exacte, dans la même livraison.** La règle de forme ne peut pas les atteindre, et plier leurs noms le montre : `xhubsignature256`, `xshopifyhmacsha256`, `xfunctionskey`, `xgoogapikey` — aucun ne finit par un des cinq suffixes. Une règle qui les laisserait dehors en se présentant comme une couverture de classe reproduirait le défaut qu'on corrige.
 
 **La couverture annoncée est « énumération PLUS suffixe », jamais « par la forme ».**
 
@@ -79,7 +79,23 @@ C'est le point qui peut casser quelque chose, et il n'est pas visible à la lect
 |---|---|---|
 | `user[token]` | `usertoken` → **attrapé** | `user[token]` → *raté* |
 
-Si le prédicat faisait son propre `foldKey`, `isSecretName` **perdrait les noms entre crochets** — une régression dans un chemin (paramètres d'URL, formulaires) qui n'a rien à voir avec les en-têtes.
+> Légende — la colonne « `foldKey` seul » décrit ce que donnerait un
+> **appelant qui sous-normalise**, pas un pliage interne au prédicat : celui-là
+> serait sans effet.
+
+Le piège n'est pas là où on le croit. `normaliseName` vaut `foldKey(name)`
+**puis** le retrait de `.` `[` `]` : le prédicat reçoit donc une chaîne déjà
+pliée, et refolder à l'intérieur serait un **no-op** (`foldKey` est idempotent).
+Mesuré pendant l'implémentation : la suite reste verte avec cette mutation.
+
+Le vrai risque est un **appelant qui sous-normalise**. `foldKey` ne retire pas
+les crochets, donc seul `normaliseName` fait finir `user[token]` par `token`.
+Si un jour `isSecretName` passait `foldKey(name)` au prédicat — le raccourci
+apparemment équivalent — ce nom cesserait d'être reconnu, et la régression
+frapperait les paramètres d'URL sans rapport avec les en-têtes.
+
+C'est donc l'**appelant** qui porte la responsabilité, et c'est l'appelant que
+la mutation attaque.
 
 **Donc `hasCredentialSuffix(nomNormalise: string)` reçoit une chaîne déjà pliée, et chaque appelant normalise selon son contexte :**
 

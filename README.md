@@ -495,19 +495,57 @@ Headers that *are* a credential are therefore dropped by NAME, in
 `authorization` · `proxy-authorization` · `cookie` · `set-cookie` ·
 `stripe-signature` · `x-knock-signature` · `x-webhook-signature` ·
 `x-vercel-signature` · `x-telegram-bot-api-secret-token` · `x-api-key` ·
-`api-key` · `x-auth-token` · `x-access-token` · `x-vercel-protection-bypass`
+`api-key` · `x-auth-token` · `x-access-token` · `x-vercel-protection-bypass` ·
+`x-hub-signature-256` · `x-shopify-hmac-sha256` · `x-functions-key` ·
+`x-goog-api-key`
 
 Webhooks Sanity — **three** distinct headers, kept adjacent on purpose:
 `sanity-webhook-signature` (the real one `@sanity/webhook` sends — no `x-`
 prefix) · `x-sanity-webhook-signature` (legacy, kept but matches nothing Sanity
 sends) · `x-sanity-webhook-secret` (the shared secret, the convention
-`@groupe-j/blog-generator` defaults to). Matching is exact, so none of the three
-covers another.
+`@groupe-j/blog-generator` defaults to). Matching **in that list** is exact, so
+none of the three covers another.
 
-Matching folds case and separators (`X-API-Key` ≡ `X_API_KEY` ≡ `x-api-key`) and
-is **exact** — `x-request-id`, `user-agent`, `referer` and the rest stay, values
-scrubbed. The name is the only net here: an API key issued without a recognisable
-prefix is a bare random string that no value-level pattern can catch.
+Matching folds case and separators (`X-API-Key` ≡ `X_API_KEY` ≡ `x-api-key`).
+Folding is not only about case: `x-csrf-token-`, `x_csrf_token_`, `x-pass-word`
+and `x-tokén` all fold onto a credential suffix where `toLowerCase` would not.
+
+Two rules apply, **in this order**:
+
+1. **the exact list above** — the key is **removed**;
+2. **a credential-suffix rule** (`token`, `secret`, `password`, `signature`,
+   `credential`) — the value becomes `[REDACTED]` and **the key stays**, so the
+   catch is visible and can be argued with.
+
+The order matters: ten of the exact list's twenty-one entries already end in a
+credential suffix, and they must keep being *removed* rather than merely marked.
+
+The suffix rule closes six real credential headers that no list named before:
+`x-csrf-token` · `x-xsrf-token` · `x-amz-signature` · `x-amz-credential` ·
+`x-amz-security-token` · `x-goog-signature`
+
+**What the suffix rule does NOT reach**, named here on purpose — announcing
+shape-based coverage without its gaps is the very fault this replaced:
+
+- a version number after the word: `x-hub-signature-256` folds to
+  `xhubsignature256`, which ends in neither `signature` nor any other suffix —
+  hence GitHub's and Shopify's are listed by name above;
+- names ending in `key`: `key` is **deliberately not a suffix**, or
+  `x-idempotency-key` and `x-cache-key` would be eaten. API keys, Azure
+  Functions and Google API keys are listed by name instead;
+- a header that *is* a credential without any word of its name saying so.
+  `x-vercel-protection-bypass` is one, and it is covered only because it is
+  named; an unnamed equivalent would pass.
+
+Coverage is therefore **"the list PLUS the suffix"**, never "by shape". Nothing
+beyond that is claimed here.
+
+Every header that **neither rule reaches** keeps both its key and its value,
+the value scrubbed by `scrubText` — `x-request-id`, `user-agent`, `referer`,
+`etag`, `location`, `x-cache-status` among them. And when a header *is* the
+secret, its name is the only net left as soon as the secret carries no
+recognisable prefix: such a key is a bare random string, which no value-level
+pattern can catch.
 
 Adding an entry: the header must **be** the secret. One that merely *carries* one
 (`referer` with a token in its query) stays — its value is scrubbed by

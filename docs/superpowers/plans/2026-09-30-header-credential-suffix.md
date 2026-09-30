@@ -961,3 +961,72 @@ git push origin design/header-credential-suffix
 **Cohérence des types et des noms** : `hasCredentialSuffix(nomNormalise: string): boolean` porte le même nom et la même signature dans les tâches 1, 2, 3 et 5, dans §19 et dans le README. `CREDENTIAL_SUFFIXES` n'apparaît qu'en tâches 1 et 3. `REDACTED` vaut `"[REDACTED]"` — les tests de la tâche 2 utilisent la constante importée, ceux de la tâche 4 le littéral parce que `before-send` n'exporte pas la constante dans ce contexte ; les deux sont la même valeur.
 
 **Écart connu, assumé** : la tâche 4 écrit des tests qui passent immédiatement. C'est signalé en tête de la tâche, et leur falsifiabilité est établie par la mutation de l'étape 4 — pas par un rouge initial.
+
+---
+
+## Errata
+
+Ce plan **n'est pas réécrit**. Il est le compte rendu de ce qui a été *demandé* :
+récrire son corps effacerait le fait qu'il était faux, et ce fait est de
+l'information — il dit où un plan écrit d'avance se trompe. Quatre de ses
+affirmations ont été réfutées par la mesure pendant l'exécution. La référence
+durable, elle, est la **spec**, corrigée dans son corps, et c'est elle que
+`DECISIONS.md` §19 cite.
+
+Les quatre avaient la même forme : **une affirmation plus large que la mesure qui
+la soutenait**.
+
+### 1. Le contrat d'entrée du prédicat — mauvaise justification
+
+**Écrit ici** (§Architecture, et lignes 120, 199, 692) : « si le prédicat faisait
+son propre `foldKey`, `isSecretName` perdrait les noms entre crochets ».
+
+**Mesuré** (tâche 1, par mutation) : faux. `normaliseName` vaut `foldKey(name)`
+**puis** le retrait de `.` `[` `]`, donc le prédicat reçoit une chaîne déjà
+pliée et refolder à l'intérieur est un no-op — la suite reste verte avec cette
+mutation en place. Ce que le contrat protège, c'est un **appelant qui
+sous-normalise** : `foldKey` ne retire pas les crochets, donc seul
+`normaliseName` fait finir `user[token]` par `token`. La mutation qui le prouve
+est **côté appelant** (`hasCredentialSuffix(foldKey(name))` dans
+`isSecretName` → `user[token]` tombe).
+
+La conclusion de conception — le prédicat reçoit un nom déjà normalisé, et il
+n'est pas exporté depuis `index.ts` — était juste ; sa justification ne l'était
+pas. Corrigé dans la spec §3.2 et dans `DECISIONS.md` §19.
+
+### 2. `x-cache-status` n'est pas un exemple du suffixe `key`
+
+**Écrit ici** (lignes 108 et 689) : le suffixe `key` « emporterait `x-cache-key`
+et `x-cache-status` ».
+
+**Mesuré** (revue de la tâche 1) : faux pour le second. `x-cache-status` plie en
+`xcachestatus` et finit par `status` — aucun des cinq suffixes ne l'atteint, et
+`key` non plus. Il reste légitime ailleurs comme en-tête de diagnostic *qui
+survit* (spec § témoins, `redaction.test.ts`). Corrigé dans la spec §2 ;
+`DECISIONS.md` §19 ne le reprend pas.
+
+### 3. « 6 trous sur 10 » — chiffre non vérifiable depuis le code
+
+**Écrit ici** (lignes 432, 473, 498, 690).
+
+**Retiré** par la tâche 3 de `src/redaction.ts` et d'un commentaire de test, puis
+de la spec. Le rapport « 6 sur 10 » dépend d'un corpus qui ne vit pas dans le
+dépôt : un lecteur ne peut ni le refaire ni le contredire. Ce qui le remplace est
+vérifiable en pliant quatre noms : `xhubsignature256`, `xshopifyhmacsha256`,
+`xfunctionskey`, `xgoogapikey` — aucun ne finit par un des cinq suffixes, donc la
+règle de forme ne peut pas les atteindre et ils sont nommés.
+
+### 4. « un séparateur n'est jamais en fin de nom »
+
+**Pas dans ce plan ni dans la spec** (vérifié) : l'affirmation venait d'une
+directive de coordination, qui en concluait que `foldKey` ne porterait aucun
+comportement propre sur le chemin du suffixe, au-delà de la casse.
+
+**Mesuré** : faux. Quatre noms discriminent `foldKey` de `toLowerCase` sur ce
+chemin, et quatre cas de `redaction.test.ts` les tiennent désormais — un
+séparateur **final** (`x-csrf-token-`, `x_csrf_token_`), un séparateur **au
+milieu du mot** (`x-pass-word` → `xpassword`) et un **accent** (`x-tokén`, qui
+passe par la branche NFD). `foldKey` agit donc sur les deux chemins, et pas
+seulement par la casse.
+
+*Consigné le 2026-09-30, tâches 5 et 6.*

@@ -286,8 +286,11 @@ const SENSITIVE_HEADERS = new Set([
   //     assumé de ce choix, c'est qu'Azure Functions et Google API doivent
   //     être nommés.
   //
-  // Les nommer ici n'est pas un pis-aller : c'est ce qui empêche le README
-  // d'annoncer une couverture « par la forme » qui fermerait 6 trous sur 10.
+  // Les nommer ici n'est pas un pis-aller : la règle de forme ne peut pas
+  // atteindre ces quatre noms-là, et le lecteur peut le vérifier en pliant
+  // leurs noms — aucun ne finit par un suffixe de `CREDENTIAL_SUFFIXES`.
+  // Le README ne doit donc pas présenter la règle comme une couverture
+  // complète « par la forme ».
   "x-hub-signature-256",
   "x-shopify-hmac-sha256",
   "x-functions-key",

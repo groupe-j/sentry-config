@@ -430,15 +430,32 @@ describe("scrubHeaders — credential-suffix rule (1.4.0)", () => {
     expect(Object.keys(out)).toContain(nom);
   });
 
-  // Ce test ne tient QUE la casse, et ne peut pas tenir davantage. Un
-  // separateur (`-`, `_`) n'est jamais EN FIN de nom : il ne peut donc pas
-  // changer le resultat d'un `endsWith`, et aucun cas de test ne distinguerait
-  // `foldKey(key)` de `key.toLowerCase()` sur ce point. Le pliage des
-  // separateurs est verrouille ailleurs — par la liste exacte, ou `X_API_KEY`
-  // et `X-API-Key` doivent tomber ensemble.
+  // `foldKey` porte du comportement sur le chemin du suffixe, et ces tests
+  // l'epinglent : sans eux, `key.toLowerCase()` passerait la suite. Trois
+  // choses que le pliage fait et que la casse seule ne fait pas :
+  //   - un separateur FINAL : `x-csrf-token-` ne finit pas par `token`, mais
+  //     `xcsrftoken` oui ;
+  //   - un separateur AU MILIEU du mot : `x-pass-word` plie en `xpassword` ;
+  //   - un accent : `x-tokén` passe par la branche NFD de `foldKey`.
+  // Les quatre noms de la table sont PEU REALISTES, et c'est assume : leur
+  // role est de verrouiller `foldKey` sur ce chemin, pas de decrire un trafic
+  // plausible. Le pliage des separateurs AU MILIEU des noms reels
+  // (`X_API_KEY`) est, lui, tenu par la liste exacte : ses tests tombent des
+  // que son lookup cesse de plier.
   it("folds case before testing the suffix", () => {
     expect(scrubHeaders({ "X-CSRF-Token": SECRET_NU })["X-CSRF-Token"]).toBe(REDACTED);
     expect(scrubHeaders({ X_CSRF_TOKEN: SECRET_NU }).X_CSRF_TOKEN).toBe(REDACTED);
+  });
+
+  it.each([
+    "x-csrf-token-",
+    "x_csrf_token_",
+    "x-pass-word",
+    "x-tokén",
+  ])("folds separators and accents before testing the suffix: marks %s", (nom) => {
+    const out = scrubHeaders({ [nom]: SECRET_NU, accept: "application/json" });
+    expect(out[nom]).toBe(REDACTED);
+    expect(JSON.stringify(out)).not.toContain(SECRET_NU);
   });
 
   // ⚠️ LA PRECEDENCE. Dix entrees de SENSITIVE_HEADERS finissent DEJA par un
@@ -468,8 +485,9 @@ describe("scrubHeaders — credential-suffix rule (1.4.0)", () => {
   //   - x-functions-key / x-goog-api-key : `key` est exclu du suffixe, pour
   //     sauver x-idempotency-key.
   // Ils sont donc NOMMES dans la liste exacte — et donc SUPPRIMES, pas marques.
-  // Sans eux, la regle fermerait 6 trous sur 10 en laissant croire qu'elle
-  // ferme la classe : le defaut meme corrige en 1.3.5.
+  // Sans eux, ces quatre en-tetes partiraient en clair alors que la regle de
+  // forme laisse croire qu'elle couvre la classe : le defaut meme corrige en
+  // 1.3.5.
   it.each([
     "x-hub-signature-256",
     "x-shopify-hmac-sha256",

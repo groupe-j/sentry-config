@@ -430,7 +430,13 @@ describe("scrubHeaders — credential-suffix rule (1.4.0)", () => {
     expect(Object.keys(out)).toContain(nom);
   });
 
-  it("folds case and separators like the exact list does", () => {
+  // Ce test ne tient QUE la casse, et ne peut pas tenir davantage. Un
+  // separateur (`-`, `_`) n'est jamais EN FIN de nom : il ne peut donc pas
+  // changer le resultat d'un `endsWith`, et aucun cas de test ne distinguerait
+  // `foldKey(key)` de `key.toLowerCase()` sur ce point. Le pliage des
+  // separateurs est verrouille ailleurs — par la liste exacte, ou `X_API_KEY`
+  // et `X-API-Key` doivent tomber ensemble.
+  it("folds case before testing the suffix", () => {
     expect(scrubHeaders({ "X-CSRF-Token": SECRET_NU })["X-CSRF-Token"]).toBe(REDACTED);
     expect(scrubHeaders({ X_CSRF_TOKEN: SECRET_NU }).X_CSRF_TOKEN).toBe(REDACTED);
   });
@@ -442,13 +448,35 @@ describe("scrubHeaders — credential-suffix rule (1.4.0)", () => {
   it.each([
     "stripe-signature",
     "x-knock-signature",
-    "x-sanity-webhook-secret",
+    "x-webhook-signature",
+    "x-vercel-signature",
+    "x-telegram-bot-api-secret-token",
+    "x-sanity-webhook-signature",
     "sanity-webhook-signature",
+    "x-sanity-webhook-secret",
     "x-auth-token",
     "x-access-token",
   ])("keeps DELETING %s — the exact list wins over the suffix rule", (nom) => {
     const out = scrubHeaders({ [nom]: SECRET_NU, accept: "application/json" });
     expect(out).not.toHaveProperty(nom);
+    expect(out).toEqual({ accept: "application/json" });
+  });
+
+  // Quatre credentials que la regle de suffixe NE PEUT PAS voir, et pourquoi :
+  //   - x-hub-signature-256 / x-shopify-hmac-sha256 : le numero de version
+  //     apres le mot desarme `endsWith` (`…signature256`) ;
+  //   - x-functions-key / x-goog-api-key : `key` est exclu du suffixe, pour
+  //     sauver x-idempotency-key.
+  // Ils sont donc NOMMES dans la liste exacte — et donc SUPPRIMES, pas marques.
+  // Sans eux, la regle fermerait 6 trous sur 10 en laissant croire qu'elle
+  // ferme la classe : le defaut meme corrige en 1.3.5.
+  it.each([
+    "x-hub-signature-256",
+    "x-shopify-hmac-sha256",
+    "x-functions-key",
+    "x-goog-api-key",
+  ])("drops %s by name, because no suffix rule can reach it", (nom) => {
+    const out = scrubHeaders({ [nom]: SECRET_NU, accept: "application/json" });
     expect(out).toEqual({ accept: "application/json" });
   });
 

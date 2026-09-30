@@ -272,6 +272,26 @@ const SENSITIVE_HEADERS = new Set([
   // est présente dans les six apps qui ont un blog. Là encore, `-signature` ne
   // couvrait pas `-secret` : le secret partait en clair.
   "x-sanity-webhook-secret",
+  //
+  // ── Credentials que la RÈGLE DE SUFFIXE ne peut pas atteindre ─────────────
+  //
+  // `hasCredentialSuffix` teste une fin de nom. Deux formes lui échappent par
+  // construction, et elles doivent donc être nommées ici :
+  //
+  //   • un numéro de version APRÈS le mot : `x-hub-signature-256` plie en
+  //     `xhubsignature256`, qui ne finit pas par `signature`. C'est la
+  //     signature des webhooks GitHub, et la même forme vaut pour Shopify ;
+  //   • un nom en `-key` : `key` est délibérément absent des suffixes, pour ne
+  //     pas emporter `x-idempotency-key` (cf. CREDENTIAL_SUFFIXES). Le coût
+  //     assumé de ce choix, c'est qu'Azure Functions et Google API doivent
+  //     être nommés.
+  //
+  // Les nommer ici n'est pas un pis-aller : c'est ce qui empêche le README
+  // d'annoncer une couverture « par la forme » qui fermerait 6 trous sur 10.
+  "x-hub-signature-256",
+  "x-shopify-hmac-sha256",
+  "x-functions-key",
+  "x-goog-api-key",
 ].map(foldKey));
 
 export function scrubHeaders(headers: Record<string, string>): Record<string, string> {
@@ -288,6 +308,11 @@ export function scrubHeaders(headers: Record<string, string>): Record<string, st
     // cesseraient d'être SUPPRIMÉES pour n'être plus que MARQUÉES — un
     // affaiblissement de la couverture existante, livré comme une amélioration.
     // Épinglé par `redaction.test.ts`.
+    //
+    // La correspondance de CETTE liste est exacte après pliage, jamais une
+    // sous-chaîne : c'est ce qui fait que `x-request-id` n'est pas emporté par
+    // elle. (Ne vaut que pour la liste exacte : la règle de forme ci-dessous,
+    // elle, teste une fin de nom.)
     if (SENSITIVE_HEADERS.has(folded)) continue;
 
     // ── 2. RÈGLE DE FORME ───────────────────────────────────────────────────

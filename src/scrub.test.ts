@@ -649,11 +649,13 @@ describe("createSentryBeforeSend — no PII leaves the process", () => {
     // scrubHeaders traverse ENSUITE scrubText (scrubHeaderValues). Le `toEqual`
     // ci-dessus établit que scrubText("[REDACTED]") rend la valeur intacte.
     //
-    // Ce que le SECOND passage ajoute, plus modestement : beforeSend accepte son
-    // propre résultat sans le mutiler — une propriété de forme, pas une
-    // vérification du marquage (le premier passage l'a déjà faite). Ce test ne
-    // garde donc PAS l'idempotence à lui seul : seul un mutant à état (un
-    // compteur, un drapeau « déjà passé ») le ferait tomber seul.
+    // Le SECOND passage garde ce que le premier ne peut pas voir : le
+    // comportement de scrubHeaders sur une valeur DÉJÀ MARQUÉE. Il n'ajoute rien
+    // sur scrubText("[REDACTED]"), déjà établi par le premier. Ce qui lui
+    // échappe, ce sont les mutants de scrubHeaderValues — le premier passage les
+    // attrape avant lui. Et l'assertion ne regarde qu'UN seul en-tête
+    // (x-csrf-token) : la stabilité est vérifiée sur celui-là, pas sur
+    // l'événement entier.
     const deuxiemePasse = beforeSend(out)!;
     expect(deuxiemePasse.request!.headers!["x-csrf-token"]).toBe(REDACTED);
   });

@@ -358,7 +358,12 @@ describe("isSecretName / isSecretParam", () => {
 
   // CARACTÉRISATION. Ces verdicts sont ceux d'AVANT l'extraction de
   // `hasCredentialSuffix` : ils épinglent le comportement pour prouver que la
-  // refactorisation ne le change pas. `user[token]` est le cas qui compte —
+  // refactorisation ne le change pas. Chacun des cinq suffixes est tenu par au
+  // moins un cas. `clientSecret`, `db_password`, `x-foo-credential` et
+  // `x-foo-signature` sont là parce qu'ils échappent aux listes exactes
+  // (`SECRET_PARAMS`, où `secret`, `password` et `xamzcredential` figurent) :
+  // seul le suffixe peut les attraper — c'est pourquoi `x-amz-credential`, lui,
+  // ne prouve rien sur `credential`. `user[token]` est le cas qui compte —
   // `isSecretName` doit continuer de normaliser avec `normaliseName`, qui
   // retire `.` `[` `]`. S'il passait `foldKey(name)` au prédicat, ce nom ne
   // finirait plus par `token` et cesserait d'être reconnu.
@@ -368,6 +373,10 @@ describe("isSecretName / isSecretParam", () => {
     ["requestToken", true],
     ["x-amz-credential", true],
     ["magicLink", true],
+    ["clientSecret", true],
+    ["db_password", true],
+    ["x-foo-credential", true],
+    ["x-foo-signature", true],
     ["ipAddress", false],
     ["firstNamespace", false],
     ["x-cache-key", false],

@@ -168,8 +168,8 @@ export function redact(value: unknown, seen = new WeakSet<object>()): unknown {
  * ⚠️ `key` N'Y FIGURE PAS, délibérément. Il emporterait `x-idempotency-key` —
  * précisément l'en-tête qu'on veut lire dans Sentry pour déboguer un double
  * paiement, et le portefeuille a un `@groupe-j/stripe` avec un
- * `src/idempotency.ts` dédié — ainsi que `x-cache-key` et `x-cache-status`,
- * qui sont du diagnostic. Les clés d'API sont couvertes NOMMÉMENT, dans
+ * `src/idempotency.ts` dédié — ainsi que `x-cache-key`, qui est du
+ * diagnostic. Les clés d'API sont couvertes NOMMÉMENT, dans
  * `SENSITIVE_KEYS` et `SENSITIVE_HEADERS`.
  */
 const CREDENTIAL_SUFFIXES = ["token", "secret", "password", "signature", "credential"] as const;

@@ -404,7 +404,7 @@ time like any other `extra`, so PII keys are scrubbed there too.
 
 > `optional` **flushTimeoutMs?**: `number`
 
-Defined in: [serverless.ts:92](https://github.com/groupe-j/sentry-config/blob/main/src/serverless.ts#L92)
+Defined in: [serverless.ts:97](https://github.com/groupe-j/sentry-config/blob/main/src/serverless.ts#L97)
 
 Max ms to wait for the transport queue to drain. Default: 2000.
 
@@ -412,12 +412,17 @@ Max ms to wait for the transport queue to drain. Default: 2000.
 
 > `optional` **headers?**: `Record`\<`string`, `string`\>
 
-Defined in: [serverless.ts:90](https://github.com/groupe-j/sentry-config/blob/main/src/serverless.ts#L90)
+Defined in: [serverless.ts:95](https://github.com/groupe-j/sentry-config/blob/main/src/serverless.ts#L95)
 
 Raw request headers to attach for debugging. Scrubbed with `scrubHeaders`
-before attachment — credential-bearing headers (`authorization`, `cookie`,
-webhook signatures) are dropped entirely; the rest survive under
-`extra.headers`. Reuses the package's canonical scrubber rather than
+before attachment, which since 1.4.0 has **three** outcomes, not two: a
+header in the exact list (`authorization`, `cookie`, named webhook
+signatures) is **dropped entirely**; a header whose folded name ends in a
+credential suffix (`token`, `secret`, `password`, `signature`,
+`credential`) keeps its **key** and gets `[REDACTED]` as its **value**;
+anything else survives untouched. What remains — marked or untouched —
+lands under `extra.headers`, where `beforeSend` scrubs it again like any
+other `extra`. Reuses the package's canonical scrubber rather than
 re-implementing it per route.
 
 ##### level?
@@ -1063,7 +1068,7 @@ True for a name whose value is PII or a credential in ANY context: a PII key
 
 > **isSecretParam**(`name`, `value`): `boolean`
 
-Defined in: [scrub.ts:210](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L210)
+Defined in: [scrub.ts:205](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L205)
 
 True when a URL / form parameter named `name` carrying `value` must be
 scrubbed: [isSecretName](#issecretname), or a weak name (`code`, `key`, `sid`…) with a
@@ -1130,7 +1135,7 @@ Defined in: [redaction.ts:141](https://github.com/groupe-j/sentry-config/blob/ma
 
 > **scrubCookies**(`cookies`): `unknown`
 
-Defined in: [scrub.ts:521](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L521)
+Defined in: [scrub.ts:516](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L516)
 
 `event.request.cookies`: names are kept (they say which session was active),
 every value is dropped — a cookie value is a credential or tracking id.
@@ -1151,7 +1156,7 @@ every value is dropped — a cookie value is a credential or tracking id.
 
 > **scrubDeep**(`value`, `seen?`, `depth?`): `unknown`
 
-Defined in: [scrub.ts:357](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L357)
+Defined in: [scrub.ts:352](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L352)
 
 Key-name redaction AND value scrubbing, recursively. Returns new containers
 (never mutates). Cycles and pathological depth become `[REDACTED]`.
@@ -1180,7 +1185,7 @@ Key-name redaction AND value scrubbing, recursively. Returns new containers
 
 > **scrubHeaders**(`headers`): `Record`\<`string`, `string`\>
 
-Defined in: [redaction.ts:239](https://github.com/groupe-j/sentry-config/blob/main/src/redaction.ts#L239)
+Defined in: [redaction.ts:300](https://github.com/groupe-j/sentry-config/blob/main/src/redaction.ts#L300)
 
 #### Parameters
 
@@ -1198,7 +1203,7 @@ Defined in: [redaction.ts:239](https://github.com/groupe-j/sentry-config/blob/ma
 
 > **scrubQueryString**(`qs`): `unknown`
 
-Defined in: [scrub.ts:495](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L495)
+Defined in: [scrub.ts:490](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L490)
 
 `event.request.query_string`: string, `{ key: value | value[] }` or `[key, value][]`.
 
@@ -1218,7 +1223,7 @@ Defined in: [scrub.ts:495](https://github.com/groupe-j/sentry-config/blob/main/s
 
 > **scrubRequestData**(`data`, `seen?`): `unknown`
 
-Defined in: [scrub.ts:470](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L470)
+Defined in: [scrub.ts:465](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L465)
 
 `event.request.data`: an object is walked; a JSON string is parsed, walked
 and re-serialised (so key-name redaction applies to it too); anything else —
@@ -1277,7 +1282,7 @@ Fails closed like the hooks (see [SCRUB\_FAILED\_TAG](#scrub_failed_tag)).
 
 > **scrubText**(`text`): `string`
 
-Defined in: [scrub.ts:306](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L306)
+Defined in: [scrub.ts:301](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L301)
 
 Scrub PII and credentials out of a free-text string, keeping the text around
 them. Returns the same string instance when nothing matched.
@@ -1338,7 +1343,7 @@ reported. Fails open so a new server-fault code is never silently dropped.
 
 > **signalServerless**(`message`, `defer`, `options?`): `void`
 
-Defined in: [serverless.ts:102](https://github.com/groupe-j/sentry-config/blob/main/src/serverless.ts#L102)
+Defined in: [serverless.ts:107](https://github.com/groupe-j/sentry-config/blob/main/src/serverless.ts#L107)
 
 Capture a serverless signal and hand a bounded transport flush to `defer`.
 

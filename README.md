@@ -495,19 +495,112 @@ Headers that *are* a credential are therefore dropped by NAME, in
 `authorization` · `proxy-authorization` · `cookie` · `set-cookie` ·
 `stripe-signature` · `x-knock-signature` · `x-webhook-signature` ·
 `x-vercel-signature` · `x-telegram-bot-api-secret-token` · `x-api-key` ·
-`api-key` · `x-auth-token` · `x-access-token` · `x-vercel-protection-bypass`
+`api-key` · `x-auth-token` · `x-access-token` · `x-vercel-protection-bypass` ·
+`x-hub-signature-256` · `x-shopify-hmac-sha256` · `x-functions-key` ·
+`x-goog-api-key`
 
 Webhooks Sanity — **three** distinct headers, kept adjacent on purpose:
 `sanity-webhook-signature` (the real one `@sanity/webhook` sends — no `x-`
 prefix) · `x-sanity-webhook-signature` (legacy, kept but matches nothing Sanity
 sends) · `x-sanity-webhook-secret` (the shared secret, the convention
-`@groupe-j/blog-generator` defaults to). Matching is exact, so none of the three
-covers another.
+`@groupe-j/blog-generator` defaults to). Matching **in that list** is exact, so
+none of the three covers another.
 
-Matching folds case and separators (`X-API-Key` ≡ `X_API_KEY` ≡ `x-api-key`) and
-is **exact** — `x-request-id`, `user-agent`, `referer` and the rest stay, values
-scrubbed. The name is the only net here: an API key issued without a recognisable
-prefix is a bare random string that no value-level pattern can catch.
+Matching folds case and separators (`X-API-Key` ≡ `X_API_KEY` ≡ `x-api-key`).
+Folding is not only about case: `x-csrf-token-`, `x_csrf_token_`, `x-pass-word`
+and `x-tokén` all fold onto a credential suffix where `toLowerCase` would not.
+
+Two rules apply, **in this order**:
+
+1. **the exact list above** — the key is **removed**;
+2. **a credential-suffix rule** (`token`, `secret`, `password`, `signature`,
+   `credential`) — the value becomes `[REDACTED]` and **the key stays**, so the
+   catch is visible and can be argued with.
+
+The order matters: ten of the exact list's twenty-one entries already end in a
+credential suffix, and they must keep being *removed* rather than merely marked.
+
+`scrubHeaders` is the scrubber for **`event.request.headers`**, and that is the
+surface rule 2 changes. Six real credential headers used to reach Sentry in the
+clear **there**, because they went through no list:
+
+`x-csrf-token` · `x-xsrf-token` · `x-amz-signature` · `x-amz-credential` ·
+`x-amz-security-token` · `x-goog-signature`
+
+**That surface, and only under the conditions named below.** The suffix rule is
+not new to the package: `isSecretName` has applied the same five suffixes to
+object keys, to URL parameters and query values, and to quoted `"key":"value"`
+pairs inside free text since before 1.4.0. So a **string** value carried by an
+object **key** and reaching Sentry through `extra` (`signalServerless` puts
+headers in `extra.headers`) was already marked, and two of the six —
+`x-amz-credential`, `x-amz-security-token` — are named in `SECRET_PARAMS`
+outright. What `event.request.headers` does not get is `scrubDeep`: it gets
+`scrubHeaders`, then `scrubText` on the values. 1.4.0 closes **that** surface.
+
+Those conditions are named because **this release closes none of them**, and a
+caller who trusts the wrong one leaks:
+
+- **inside a string, key-name redaction only reaches a name written in a
+  syntax it recognises.** Two conditions, both required: the pair reads `k=v`,
+  **or** its value is quoted; **and** the name ends in a credential suffix. The
+  **name** is what decides, the pattern only *locates* it — measured with the
+  value held constant, `zzz_token=csrf_AAA` is redacted and `zzz=csrf_AAA` is
+  not, alike in all four syntaxes. So `x-csrf-token: csrf_AAA` — an unquoted
+  value after a colon — fails the syntax condition and comes out **in the
+  clear**, while `x-csrf-token: "csrf_AAA"` is caught. Nothing else catches it
+  either: `csrf_AAA` carries no prefix `scrubText` recognises. See
+  *PII inside messages, bodies and URLs* below;
+- **a non-string value escapes the suffix, by design.** `scrubEntry` requires
+  `typeof v === "string"` so that `tokenCount: 3` stays readable; measured,
+  `{ "x-csrf-token": 12345 }` therefore comes out in the clear too;
+- **the name can sit in a sister string instead of in a key.** Measured,
+  `scrubDeep({ headers: [["x-csrf-token", "csrf_AAA"]] })` comes out in the
+  clear: the pair is two array elements, so no key carries the name and no
+  recognised syntax joins them. Reach is small, and worth saying so as not to
+  alarm for nothing — `signalServerless` types `headers` as
+  `Record<string, string>`, so this needs a caller who writes
+  `Object.entries(h)` by hand. The path exists all the same.
+
+**What the suffix rule does NOT reach**, named here on purpose — announcing
+shape-based coverage without its gaps is the very fault this replaced:
+
+- a version or algorithm token after the word — not always a number:
+  `x-hub-signature-256` folds to `xhubsignature256` and Shopify's
+  `x-shopify-hmac-sha256` to `xshopifyhmacsha256`, neither ending in
+  `signature` nor in any other suffix. Both are listed by name above;
+- names ending in `key`: `key` is **deliberately not a suffix**, or
+  `x-idempotency-key` and `x-cache-key` would be eaten. API keys, Azure
+  Functions and Google API keys are listed by name instead;
+- a header that *is* a credential without any word of its name saying so.
+  `x-vercel-protection-bypass` is one, and it is covered only because it is
+  named; an unnamed equivalent would pass.
+
+Coverage is therefore **"the list PLUS the suffix"**, never "by shape". Nothing
+beyond that is claimed here.
+
+A header that neither rule reaches comes out of `scrubHeaders` with its key and
+its value — `x-request-id`, `user-agent`, `referer`, `etag`, `x-cache-status`
+among them — and the pipeline then scrubs that value with `scrubText`.
+
+That statement is about `scrubHeaders` **only**, and the distinction is not
+academic: `location` survives `scrubHeaders` (the `keeps Location` test pins
+exactly that), yet the same header inside `extra.headers` comes back
+`[REDACTED]`, because `scrubDeep` consults the PII key list where `location`
+means a person's whereabouts. Same name, two surfaces, two verdicts — which is
+why the header path must never call `isSecretName`.
+
+The **spelling of the marker** differs across those same two surfaces, and that
+is a contract surface too: a Sentry search written on one literal stops matching
+the other. `x-csrf-token` is caught by its suffix on **both** paths, and yet,
+measured on 1.4.0, it comes back `[REDACTED]` from `scrubHeaders`
+(`event.request.headers`) and `[redacted]` from `scrubDeep` (`extra.headers`):
+key-name redaction and value-level scrubbing use deliberately different casings
+(`REDACTED` vs `REDACTED_VALUE`), so a reader can tell which rule fired. Same
+header, same catch, two literals to search for.
+
+And when a header *is* the secret, its name is the only net left as soon as the
+secret carries no recognisable prefix: such a key is a bare random string, which
+no value-level pattern can catch.
 
 Adding an entry: the header must **be** the secret. One that merely *carries* one
 (`referer` with a token in its query) stays — its value is scrubbed by

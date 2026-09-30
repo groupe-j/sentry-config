@@ -151,9 +151,18 @@ node -e "
 # Should print: { request: { data: { userMobile: '[REDACTED]' } } }
 ```
 
-### 5. Bump patch (ajout de redaction = patch)
+### 5. Bump : patch ou minor ?
 
-Ajout d'une clé sensible = **patch** (`0.1.4` → `0.1.5`), pas de breaking change pour les consommateurs. Suivre [process de release](#process-de-release).
+- **Ajouter un NOM** à une liste (clé sensible, en-tête) = **patch** (`1.3.4` → `1.3.5`). L'effet est borné au nom ajouté, et c'est exactement l'effet demandé.
+- **Changer le RÉGIME DE CORRESPONDANCE** (une règle de forme au lieu d'une énumération) ou la **FORME DU RETOUR** d'un export public = **minor** (`1.3.5` → `1.4.0`). L'effet porte sur des noms que personne n'a énumérés.
+
+> Aucun des deux n'est « sans changement observable » : retirer un en-tête nommé se voit aussi dans Sentry. La ligne de partage est la **prévisibilité** — un patch ne change que ce que son auteur a nommé ; un minor change ce qu'il n'a pas pu énumérer.
+
+Mesuré sur 1.4.0 : `scrubHeaders` rend `[REDACTED]` comme **valeur** d'un en-tête attrapé par son suffixe — donc dans `event.request.headers`, la surface dont il est le scrubber — là où 1.3.5 rendait la valeur réelle — la clé, elle, était déjà présente dans les deux versions. Une requête Sentry écrite sur cette valeur cesse de correspondre.
+
+La distinction date du 2026-09-30 (DECISIONS.md §19). Avant elle, cette section disait « ajout de redaction = patch » sans réserve, ce qui aurait classé 1.4.0 en patch.
+
+Suivre [process de release](#process-de-release).
 
 ---
 

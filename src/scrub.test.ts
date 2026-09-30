@@ -355,6 +355,35 @@ describe("isSecretName / isSecretParam", () => {
     expect(isSecretParam("token", REDACTED_VALUE)).toBe(false);
     expect(isSecretParam("code", "500")).toBe(false);
   });
+
+  // CARACTÉRISATION. Ces verdicts sont ceux d'AVANT l'extraction de
+  // `hasCredentialSuffix` : ils épinglent le comportement pour prouver que la
+  // refactorisation ne le change pas. Chacun des cinq suffixes est tenu par au
+  // moins un cas. `clientSecret`, `db_password`, `x-foo-credential` et
+  // `x-foo-signature` sont là parce qu'ils échappent aux listes exactes
+  // (`SECRET_PARAMS`, où `secret`, `password` et `xamzcredential` figurent) :
+  // seul le suffixe peut les attraper — c'est pourquoi `x-amz-credential`, lui,
+  // ne prouve rien sur `credential`. `user[token]` est le cas qui compte —
+  // `isSecretName` doit continuer de normaliser avec `normaliseName`, qui
+  // retire `.` `[` `]`. S'il passait `foldKey(name)` au prédicat, ce nom ne
+  // finirait plus par `token` et cesserait d'être reconnu.
+  it.each([
+    ["user[token]", true],
+    ["refresh_token", true],
+    ["requestToken", true],
+    ["x-amz-credential", true],
+    ["magicLink", true],
+    ["clientSecret", true],
+    ["db_password", true],
+    ["x-foo-credential", true],
+    ["x-foo-signature", true],
+    ["ipAddress", false],
+    ["firstNamespace", false],
+    ["x-cache-key", false],
+    ["x-idempotency-key", false],
+  ])("isSecretName(%s) === %s, before and after the extraction", (nom, attendu) => {
+    expect(isSecretName(nom)).toBe(attendu);
+  });
 });
 
 // ─── Request parts ─────────────────────────────────────────────────────────
@@ -588,6 +617,53 @@ describe("createSentryBeforeSend — no PII leaves the process", () => {
       "user-agent": "Sanity-Webhook/1.0",
       "content-type": "application/json",
     });
+  });
+
+  it("marks a credential-suffix header inside a real event, and leaves it alone on a second pass", () => {
+    // Câblage : `scrubHeaders` a deux appelants, et celui-ci (before-send) doit
+    // recevoir la règle de suffixe. La clé est conservée, la valeur est marquée.
+    const SECRET_NU = "k3n8Pq2wRt7vZx1mLb4c";
+    const evenement = {
+      request: {
+        url: "https://www.example.com/api/v1/projects",
+        headers: {
+          "x-csrf-token": SECRET_NU,
+          location: "https://www.example.com/apres-redirection",
+          "user-agent": "Mozilla/5.0",
+          "x-request-id": "req_01J9",
+        },
+      },
+      exception: { values: [{ type: "Error", value: "boom" }] },
+    };
+
+    const out = beforeSend(evenement)!;
+    expect(JSON.stringify(out)).not.toContain(SECRET_NU);
+    expect(out.request!.headers).toEqual({
+      "x-csrf-token": REDACTED,
+      location: "https://www.example.com/apres-redirection",
+      "user-agent": "Mozilla/5.0",
+      "x-request-id": "req_01J9",
+    });
+
+    // IDEMPOTENCE — ce qui est MESURÉ, et rien de plus.
+    //
+    // Premier passage : `scrubHeaders` marque `x-csrf-token`, puis la valeur
+    // traverse `scrubText` (`scrubHeaderValues`). Le `toEqual` ci-dessus établit
+    // donc que `scrubText("[REDACTED]")` rend la valeur intacte.
+    //
+    // Second passage : `beforeSend` reçoit son propre résultat. MESURÉ — deux
+    // mutants SANS état, l'un dans `scrubHeaders`, l'autre dans
+    // `scrubHeaderValues`, qui se comportent normalement sur une valeur brute et
+    // dévient sur une valeur déjà marquée, font tomber le `toBe` ci-dessous SEUL.
+    // Le second passage garde donc quelque chose que le premier ne voit pas.
+    //
+    // ⚠️ AUCUNE PRÉTENTION D'EXHAUSTIVITÉ. Trois formulations successives de ce
+    // commentaire ont voulu énumérer ce qui ÉCHAPPE à ce test ; les trois ont été
+    // réfutées par un contre-exemple écrit en une ligne. On n'énumère donc plus :
+    // ci-dessus est ce qui a été mesuré, pas une frontière. La portée de
+    // l'assertion du second passage est UN en-tête, `x-csrf-token`.
+    const deuxiemePasse = beforeSend(out)!;
+    expect(deuxiemePasse.request!.headers!["x-csrf-token"]).toBe(REDACTED);
   });
 
   it("redacts client-IP headers, request.env.REMOTE_ADDR and mechanism data", () => {

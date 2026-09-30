@@ -3,6 +3,128 @@
 All notable changes to `@groupe-j/sentry-config` are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [1.4.0] - 2026-09-30
+
+### Added
+
+- **Règle de suffixe de credential sur les noms d'en-têtes** (suite de GRO-1563).
+  `SENSITIVE_HEADERS` reste, et une règle s'y ajoute : un en-tête dont le nom
+  plié finit par `token`, `secret`, `password`, `signature` ou `credential` voit
+  sa **valeur** remplacée par `[REDACTED]`, sa **clé conservée**.
+
+  **Ce qui change est une SURFACE, pas l'apparition d'une règle.** La règle de
+  suffixe existait déjà dans `isSecretName`, appliquée aux clés d'objet
+  (`scrubEntry`), aux paramètres d'URL (`isSecretParam`, deux sites) et aux
+  paires à valeur **citée** dans du texte libre (`QUOTED_KV`) — mesuré sur
+  v1.3.5, et cette énumération n'est pas donnée pour exhaustive. Des chemins
+  nettoyés **par nom** que les hooks appliquent à un événement, **et pour une
+  valeur de type chaîne**, celui des en-têtes était le seul à n'avoir que la
+  liste exacte, et `event.request.headers` ne reçoit pas `scrubDeep` (il reçoit
+  `scrubHeaders`, puis `scrubText` sur les valeurs).
+
+  La restriction au type **chaîne** n'est pas décorative : pour une valeur
+  non-chaîne, la surface des clés d'objet n'a elle aussi que la liste exacte,
+  parce que `scrub.ts:369` passe avant le test de chaîne de `:372`. Mesuré sur
+  1.4.0 : `scrubDeep({ authorization: 12345 })` rend `[REDACTED]`, mais
+  `scrubDeep({ "x-auth-token": 12345 })` reste **inchangé**.
+
+  Liste des surfaces et de leur portée : DECISIONS.md §19.
+
+  Ferme donc six credentials **dans `event.request.headers`** :
+  `x-csrf-token`, `x-xsrf-token`, `x-amz-signature`, `x-amz-credential`,
+  `x-amz-security-token`, `x-goog-signature`. **Cette surface-là, et sous deux
+  conditions.** Sur le chemin `extra` (`signalServerless` place les en-têtes
+  dans `extra.headers`, que `before-send` passe à `scrubDeep`), une valeur de
+  type **chaîne** portée par une **clé** d'objet était déjà marquée avant
+  1.4.0, et `x-amz-credential` comme `x-amz-security-token` figurent
+  nommément dans `SECRET_PARAMS` depuis v1.3.5.
+
+  **Mais ni 1.4.0 ni les versions précédentes ne ferment ce qui échappe à ces
+  deux conditions** — mesuré sur 1.4.0, et nommé ici, à l'endroit de
+  l'affirmation, parce qu'un consommateur qui lit « déjà couvert ailleurs »
+  en déduirait qu'il n'a plus aucune surface à vérifier :
+
+  - `scrubDeep({ raw: "x-csrf-token: csrf_AAA" })` sort **en clair** : dans du
+    texte libre, il faut que la paire s'écrive `k=v` **ou** que sa valeur soit
+    citée. La même paire avec guillemets, `x-csrf-token: "csrf_AAA"`, est prise ;
+  - `scrubDeep({ "x-csrf-token": 12345 })` sort **en clair** : `scrubEntry`
+    exige `typeof v === "string"`, pour que `tokenCount: 3` reste lisible ;
+  - `scrubDeep({ headers: [["x-csrf-token", "csrf_AAA"]] })` sort **en
+    clair** : le nom est dans une chaîne sœur, pas dans une clé. Portée
+    réelle faible — `signalServerless` type `headers` en
+    `Record<string, string>`, il faut donc qu'un consommateur écrive
+    `Object.entries(h)` à la main — mais le chemin existe.
+
+  Ce que la règle couvre **en trop**, et ce qu'elle ne couvre pas :
+  DECISIONS.md §19, bloc « laisse OUVERT ».
+
+  **Pourquoi une règle et pas un nom de plus** : les deux correctifs précédents
+  (1.3.4 du 23/09, 1.3.5 du 29/09) avaient tous deux ajouté des noms après
+  coup, et GRO-1563 a montré le vrai défaut — `x-sanity-webhook-signature`
+  était présent depuis longtemps sans correspondre à aucun nom que
+  `@sanity/webhook` envoie. Une énumération ne couvre que ce qu'on a pensé à y
+  mettre. S'y ajoute que `@groupe-j/blog-generator` rend son `headerName`
+  surchargeable : son défaut est couvert nommément, mais un nom surchargé
+  n'existe qu'à l'exécution.
+
+  **Précédence, liste exacte d'abord.** Dix de ses vingt-et-une entrées
+  finissent déjà par un suffixe de credential ; sans ordre explicite elles
+  passeraient de supprimées à marquées.
+
+  **Asymétrie assumée** : ce qui est nommé disparaît, ce qui est attrapé par sa
+  forme est marqué. Une règle de forme trop large se découvre mal si elle
+  supprime — l'objet est seulement plus petit. Voir DECISIONS.md §19.
+
+  **Quatre credentials sont ajoutés NOMMÉMENT**, parce que la règle de suffixe
+  ne peut pas les atteindre : `x-hub-signature-256` et `x-shopify-hmac-sha256`
+  (le numéro de version désarme `endsWith` — ils plient en `xhubsignature256`
+  et `xshopifyhmacsha256`), `x-functions-key` et `x-goog-api-key` (`key` est
+  exclu des suffixes, pour ne pas emporter `x-idempotency-key` ni
+  `x-cache-key`).
+
+  **Ce que la règle NE couvre PAS** est nommé dans le README et dans §19 :
+  annoncer une couverture par la forme sans dire ce qu'elle rate serait le
+  défaut corrigé.
+
+### Changed
+
+- **`scrubHeaders` rend désormais `[REDACTED]` comme valeur d'un en-tête
+  attrapé par son suffixe**, là où 1.3.5 rendait la valeur réelle. La clé était
+  déjà présente dans les deux versions : c'est la **valeur** qui change, et
+  c'est ce qui fait de cette version un **minor** et non un patch, contre la
+  lettre de `CONTRIBUTING.md` — dont la section 5 est amendée pour distinguer
+  « ajouter un nom » (patch) de « changer le régime de correspondance ou la
+  forme du retour » (minor). Une requête Sentry écrite sur la valeur d'un
+  `x-csrf-token` cesse de correspondre.
+- **Les quatre en-têtes nommés ci-dessus sont maintenant SUPPRIMÉS** de
+  `event.request.headers`, là où 1.3.5 les laissait passer en clair.
+- `isSecretName` consomme le même prédicat que les en-têtes. **Refactorisation
+  pure**, épinglée par un test de caractérisation de treize cas : `user[token]`,
+  `requestToken`, `magicLink`, `x-amz-credential` restent vrais ; `ipAddress`,
+  `firstNamespace`, `x-cache-key`, `x-idempotency-key` restent faux. Le verdict
+  `true` de `requestToken` n'est pas un effet de bord de cette version : il est
+  antérieur, et il rend périmé un contre-exemple de `DECISIONS.md` §3, dont
+  l'encart de portée le signale désormais. Le
+  prédicat reçoit un nom **déjà normalisé**, et la responsabilité est chez
+  l'appelant : refolder à l'intérieur serait un no-op (vérifié par mutation),
+  tandis qu'un appelant qui passerait `foldKey(name)` au lieu de son
+  `normaliseName` perdrait `user[token]`, dont les crochets ne tombent que là.
+
+### Vérifié à la livraison
+
+- Suite complète : **13 fichiers, 306 tests**, tous verts
+  (`vitest run --no-file-parallelism --maxWorkers=1`).
+- `typecheck`, `lint` (0 erreur) et `build` à `0`.
+- `x-hub-signature-256` présent dans les **cinq entrées qui embarquent la
+  rédaction**, en **ESM et en CJS** : `index`, `client`, `client-lazy`, `edge`,
+  `server`, soit 10 des 12 bundles. `tsup.config.ts` déclare une **sixième**
+  entrée, `armed`, qui n'embarque aucune rédaction — `src/armed.ts` n'importe
+  rien, par construction — donc `armed.js` et `armed.cjs` ne la portent pas, et
+  c'est correct. Les `.cjs` sont contrôlés séparément : c'est eux que `require()`
+  résout.
+- `hasCredentialSuffix` **absent** de `src/index.ts` : son contrat d'entrée le
+  rend impropre à la surface publique.
+
 ## [1.3.5] - 2026-09-29
 
 ### Fixed

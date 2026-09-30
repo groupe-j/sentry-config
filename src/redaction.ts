@@ -163,6 +163,44 @@ export function redact(value: unknown, seen = new WeakSet<object>()): unknown {
 }
 
 /**
+ * Suffixes de nom qui désignent un credential, quel que soit le contexte.
+ *
+ * ⚠️ `key` N'Y FIGURE PAS, délibérément. Il emporterait `x-idempotency-key` —
+ * précisément l'en-tête qu'on veut lire dans Sentry pour déboguer un double
+ * paiement, et le portefeuille a un `@groupe-j/stripe` avec un
+ * `src/idempotency.ts` dédié — ainsi que `x-cache-key`, qui est du
+ * diagnostic. Les clés d'API sont couvertes NOMMÉMENT, dans
+ * `SENSITIVE_KEYS` et `SENSITIVE_HEADERS`.
+ */
+const CREDENTIAL_SUFFIXES = ["token", "secret", "password", "signature", "credential"] as const;
+
+/**
+ * Vrai si le nom finit par un suffixe de credential.
+ *
+ * ⚠️ CONTRAT D'ENTRÉE : `nomNormalise` doit être DÉJÀ normalisé, et c'est à
+ * l'appelant de choisir LE BON normaliseur. Ce n'est pas une coquetterie :
+ *
+ *   • `isSecretName` (paramètres d'URL, formulaires) doit passer par
+ *     `normaliseName`, qui retire `.` `[` `]` en plus de ce que fait
+ *     `foldKey` — sans quoi `user[token]` ne finit pas par `token` et cesse
+ *     d'être reconnu ;
+ *   • `scrubHeaders` (en-têtes HTTP) passe par `foldKey`, suffisant là où les
+ *     noms n'ont ni point ni crochet.
+ *
+ * Normaliser ICI ne protégerait de rien : `foldKey` est idempotent sur une
+ * chaîne déjà pliée, et il ne retire pas les crochets — un appelant qui
+ * sous-normalise resterait cassé. La responsabilité est donc chez l'appelant,
+ * et un test de caractérisation la tient : passer `foldKey(name)` au lieu de
+ * `n` dans `isSecretName` fait tomber `user[token]`.
+ *
+ * Pas exporté depuis `index.ts` : ce contrat est un piège pour un appelant
+ * externe.
+ */
+export function hasCredentialSuffix(nomNormalise: string): boolean {
+  return CREDENTIAL_SUFFIXES.some((suffixe) => nomNormalise.endsWith(suffixe));
+}
+
+/**
  * Headers that are credentials by another name — strip them entirely.
  * They have no debug value once an error has fired.
  *
@@ -234,17 +272,62 @@ const SENSITIVE_HEADERS = new Set([
   // est présente dans les six apps qui ont un blog. Là encore, `-signature` ne
   // couvrait pas `-secret` : le secret partait en clair.
   "x-sanity-webhook-secret",
+  //
+  // ── Credentials que la RÈGLE DE SUFFIXE ne peut pas atteindre ─────────────
+  //
+  // `hasCredentialSuffix` teste une fin de nom. Deux formes lui échappent par
+  // construction, et elles doivent donc être nommées ici :
+  //
+  //   • un numéro de version APRÈS le mot : `x-hub-signature-256` plie en
+  //     `xhubsignature256`, qui ne finit pas par `signature`. C'est la
+  //     signature des webhooks GitHub, et la même forme vaut pour Shopify ;
+  //   • un nom en `-key` : `key` est délibérément absent des suffixes, pour ne
+  //     pas emporter `x-idempotency-key` (cf. CREDENTIAL_SUFFIXES). Le coût
+  //     assumé de ce choix, c'est qu'Azure Functions et Google API doivent
+  //     être nommés.
+  //
+  // Les nommer ici n'est pas un pis-aller : la règle de forme ne peut pas
+  // atteindre ces quatre noms-là, et le lecteur peut le vérifier en pliant
+  // leurs noms — aucun ne finit par un suffixe de `CREDENTIAL_SUFFIXES`.
+  // Le README ne doit donc pas présenter la règle comme une couverture
+  // complète « par la forme ».
+  "x-hub-signature-256",
+  "x-shopify-hmac-sha256",
+  "x-functions-key",
+  "x-goog-api-key",
 ].map(foldKey));
 
 export function scrubHeaders(headers: Record<string, string>): Record<string, string> {
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers)) {
     // `foldKey`, pas `toLowerCase` : même règle que `SENSITIVE_KEYS` au-dessus,
-    // donc `X-API-Key` et `X_API_KEY` tombent comme `x-api-key`. Correspondance
-    // EXACTE après pliage, jamais une sous-chaîne — `x-request-id` reste.
-    if (!SENSITIVE_HEADERS.has(foldKey(key))) {
-      result[key] = value;
-    }
+    // donc `X-API-Key` et `X_API_KEY` tombent comme `x-api-key`.
+    const folded = foldKey(key);
+
+    // ── 1. LISTE EXACTE, EN PREMIER ─────────────────────────────────────────
+    // L'ORDRE EST SIGNIFIANT. Dix entrées de `SENSITIVE_HEADERS` finissent déjà
+    // par un suffixe de credential (`stripe-signature`, `x-auth-token`,
+    // `x-sanity-webhook-secret`…). Si le suffixe était évalué avant, elles
+    // cesseraient d'être SUPPRIMÉES pour n'être plus que MARQUÉES — un
+    // affaiblissement de la couverture existante, livré comme une amélioration.
+    // Épinglé par `redaction.test.ts`.
+    //
+    // La correspondance de CETTE liste est exacte après pliage, jamais une
+    // sous-chaîne : c'est ce qui fait que `x-request-id` n'est pas emporté par
+    // elle. (Ne vaut que pour la liste exacte : la règle de forme ci-dessous,
+    // elle, teste une fin de nom.)
+    if (SENSITIVE_HEADERS.has(folded)) continue;
+
+    // ── 2. RÈGLE DE FORME ───────────────────────────────────────────────────
+    // Attrapé par son SUFFIXE, pas par son nom : on MARQUE au lieu de
+    // supprimer. Asymétrie assumée (DECISIONS.md §19). Une règle de forme trop
+    // large est invisible si elle supprime — l'objet est seulement plus petit,
+    // et personne ne sait pourquoi. Le marqueur rend la prise contestable.
+    //
+    // ⚠️ `hasCredentialSuffix`, JAMAIS `isSecretName` : celui-ci commence par
+    // `isSensitive`, qui consulte les clés PII — où figure `location`, l'en-tête
+    // standard d'une redirection.
+    result[key] = hasCredentialSuffix(folded) ? REDACTED : value;
   }
   return result;
 }

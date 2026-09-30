@@ -82,9 +82,14 @@ export interface SignalServerlessOptions {
   extra?: Record<string, unknown>;
   /**
    * Raw request headers to attach for debugging. Scrubbed with `scrubHeaders`
-   * before attachment — credential-bearing headers (`authorization`, `cookie`,
-   * webhook signatures) are dropped entirely; the rest survive under
-   * `extra.headers`. Reuses the package's canonical scrubber rather than
+   * before attachment, which since 1.4.0 has **three** outcomes, not two: a
+   * header in the exact list (`authorization`, `cookie`, named webhook
+   * signatures) is **dropped entirely**; a header whose folded name ends in a
+   * credential suffix (`token`, `secret`, `password`, `signature`,
+   * `credential`) keeps its **key** and gets `[REDACTED]` as its **value**;
+   * anything else survives untouched. What remains — marked or untouched —
+   * lands under `extra.headers`, where `beforeSend` scrubs it again like any
+   * other `extra`. Reuses the package's canonical scrubber rather than
    * re-implementing it per route.
    */
   headers?: Record<string, string>;

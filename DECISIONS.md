@@ -47,6 +47,22 @@ Chaque décision liste : **Contexte**, **Décision**, **Pourquoi**, **Conséquen
 
 **Conséquences si renversé** : tu vas redacter `ipAddress`, `requestToken` (non-PII), `firstNamespace` (devName), etc. — perte massive d'info de debug.
 
+> **📍 PRÉCISION DE PORTÉE, 2026-09-30 (§19) — §19 ne restreint PAS cette
+> décision.** Ce qui est décrit ici est la correspondance de `SENSITIVE_KEYS` :
+> **exacte sur la clé pliée**, jamais une sous-chaîne. Elle n'a jamais été la
+> seule règle appliquée aux clés — une **règle de suffixe de credential** vit
+> dans `isSecretName`, et elle coexistait déjà avec §3 avant 1.4.0, sur les clés
+> d'objet (`scrubEntry`) comme sur les paramètres d'URL. §19 ne fait que
+> l'étendre à une **troisième surface**, les noms d'en-têtes dans `scrubHeaders`.
+>
+> **Un des quatre contre-exemples ci-dessus est périmé.** Mesuré le 2026-09-30 :
+> `scrubDeep({ ipAddress })`, `{ emailAddressType }` et `{ firstNamespace }`
+> passent intacts — la démonstration tient pour eux. Mais
+> `scrubDeep({ requestToken: "abc123" })` rend `{"requestToken":"[redacted]"}` :
+> il finit par `token`, donc le **suffixe** l'attrape, précisément parce qu'il
+> n'est pas régi par §3. À relire comme : §3 empêche `SENSITIVE_KEYS` de mordre
+> par sous-chaîne, elle n'a jamais promis qu'aucune autre règle ne mordrait.
+
 ---
 
 ## 4. `[REDACTED]` visible, pas suppression silencieuse
@@ -549,6 +565,48 @@ préfixe, liste partagée entre contexts, `browser` / `device`) rouvre le même
 trou par un autre côté. Tout est épinglé par `redaction.test.ts` et
 `sdk-contexts.test.ts` : 17 mutants tués à la livraison, et le test du vrai SDK
 échoue sur le code d'avant.
+
+---
+
+## 19. Noms d'en-têtes : suffixe de credential, en PLUS de l'énumération
+
+**Contexte** : deux correctifs en six jours (1.3.4 du 2026-09-23, GRO-1548 ; 1.3.5 du 2026-09-29, GRO-1563) ont tous deux consisté à ajouter des noms après coup dans `SENSITIVE_HEADERS`. Le mode de panne n'est pas « il manque un nom » : une énumération ne couvre que ce qu'on a pensé à y mettre, et rien dans le paquet ne signale ce qu'elle rate — il a fallu deux incidents pour trouver ces noms-là. GRO-1563 l'a montré par l'absurde : `x-sanity-webhook-signature`, présent depuis longtemps, ne correspond à aucun nom que `@sanity/webhook` envoie (son `SIGNATURE_HEADER_NAME` vaut `sanity-webhook-signature`, sans préfixe `x-`), et n'avait aucun test. S'y ajoute que `@groupe-j/blog-generator` expose son `headerName` en option surchargeable : son défaut est couvert nommément, mais un nom **surchargé** n'existe qu'à l'exécution, et aucune liste écrite d'avance ne peut le contenir.
+
+**Ce que 1.4.0 change est une SURFACE, pas l'introduction d'une règle.** Mesuré sur v1.3.5 (`git show d325e22`) : la règle de suffixe s'appliquait **déjà** partout où passe `isSecretName`. Des surfaces nettoyées par nom, nommées plutôt que comptées — un décompte vieillit et devient faux au premier chemin oublié — et **cette liste n'est pas donnée pour exhaustive** : clés d'objet (`scrubEntry`, `scrub.ts:369-372`) · paramètres d'URL et valeurs de query (`isSecretParam`, `scrub.ts:222` et `:483`) · paires dans du texte libre, valeur **citée** (`QUOTED_KV`, `scrub.ts:271`) · noms d'en-têtes (`scrubHeaders`, `redaction.ts:319` et `:330`) · en-têtes d'IP (`IP_KEY`, `before-send.ts:117`) · et **`redact()`, qui est exporté** (`redaction.ts:140-161`) : il consulte `SENSITIVE_KEYS` par correspondance exacte et **n'applique aucun suffixe**. Mesuré : il rédige `password`, mais laisse passer `clientSecret`, `zzz_token` — et même `authorization`, qui est dans `SENSITIVE_HEADERS` et non dans `SENSITIVE_KEYS`. Un consommateur qui lui passe des en-têtes n'obtient donc pas la couverture de `scrubHeaders`.
+
+Parmi ces surfaces, **et pour une valeur de type chaîne**, celle des en-têtes était la seule **des surfaces que les hooks appliquent à un événement** à n'avoir que la liste exacte ; `redact()`, exporté et appliqué par le consommateur, n'a jamais eu le suffixe — voir le paragraphe précédent. `event.request.headers` ne reçoit pas `scrubDeep` (`before-send.ts:116-117` — `scrubHeaders`, puis `scrubText` sur les valeurs). C'est là que les six credentials ci-dessous sortaient en clair.
+
+**Décision** : une règle de **suffixe de credential** (`token`, `secret`, `password`, `signature`, `credential`) s'applique aux noms d'en-têtes, **en plus** de `SENSITIVE_HEADERS` — jamais à sa place. Deux cas évalués **dans cet ordre** : liste exacte → clé supprimée ; suffixe → valeur `[REDACTED]`, clé conservée. Sinon `scrubHeaders` rend la valeur **inchangée** — c'est le pipeline, pas la fonction, qui lui applique ensuite `scrubText` (`before-send.ts:117`).
+
+**Pourquoi** :
+
+- **L'ordre.** Sur les 21 entrées de `SENSITIVE_HEADERS`, **dix finissent déjà par un suffixe de credential** (`stripe-signature`, `x-auth-token`, `x-sanity-webhook-secret`… — compté en pliant les 21 noms). Sans précédence, elles passeraient de supprimées à marquées : un affaiblissement de la couverture existante, livré comme une amélioration. Épinglé par `redaction.test.ts`.
+- **`key` est exclu des suffixes.** Il emporterait `x-idempotency-key` — l'en-tête qu'on veut lire pour déboguer un double paiement — ainsi que `x-cache-key`, qui est du diagnostic. Coût assumé : `x-functions-key` et `x-goog-api-key` doivent être nommés. (`x-cache-status`, longtemps cité à côté de `x-cache-key` dans les brouillons de cette décision, n'était PAS concerné : il plie en `xcachestatus` et finit par `status`.)
+- **Le suffixe ne remplace pas l'énumération.** Quatre noms sont ajoutés à la liste exacte, pour **deux raisons distinctes** : un jeton de version ou d'algorithme **après** le mot désarme `endsWith` — `x-hub-signature-256` et `x-shopify-hmac-sha256` ; et `key` étant exclu des suffixes (puce précédente), `x-functions-key` et `x-goog-api-key` ne pouvaient de toute façon pas être atteints. Un lecteur peut le vérifier en pliant les quatre : `xhubsignature256`, `xshopifyhmacsha256`, `xfunctionskey`, `xgoogapikey`, dont aucun ne finit par un des cinq suffixes. Une règle qui les laisserait dehors tout en se présentant comme une couverture de classe reproduirait le défaut qu'on corrige.
+- **`isSecretName` n'est PAS branché sur les en-têtes**, bien que ce soit le raccourci évident. Sa première ligne est `isSensitive(name)`, qui consulte les clés PII — où figure `location`, au sens « lieu d'une personne ». Mesuré sur le `dist` : `isSecretName("location")` rend `true`. Or `Location` est l'en-tête standard qui porte la cible d'une redirection. Le brancher détruirait cette cible sur n'importe quelle réponse qui en porte une — valeur remplacée par `[REDACTED]` s'il prenait la place du prédicat de suffixe, clé supprimée s'il prenait celle de la liste exacte. Un test témoin (`keeps Location …`) refuse les deux et dit pourquoi.
+- **Le prédicat reçoit un nom DÉJÀ normalisé, et la responsabilité est chez l'appelant.** `normaliseName` vaut `foldKey` puis le retrait de `.` `[` `]` ; refolder dans le prédicat serait un no-op, vérifié par mutation. Ce que le contrat protège, c'est le cas d'un appelant qui **sous-normalise** : `foldKey` ne retire pas les crochets, donc seul `normaliseName` fait finir `user[token]` par `token`. Un `isSecretName` qui passerait `foldKey(name)` — le raccourci apparemment équivalent — casserait la reconnaissance des paramètres d'URL, sans rapport avec le changement qui l'aurait introduit. C'est aussi pourquoi `hasCredentialSuffix` n'est pas exporté depuis `index.ts`.
+- **`foldKey` porte du comportement sur ce chemin, et pas seulement la casse.** Quatre noms le discriminent de `toLowerCase` côté suffixe : un séparateur **final** (`x-csrf-token-`, `x_csrf_token_`), un séparateur **au milieu du mot** (`x-pass-word` → `xpassword`) et un **accent** (`x-tokén`, branche NFD). Les quatre sont dans `redaction.test.ts` — contre l'intuition, courante en revue, qu'un séparateur ne se trouverait jamais en fin de nom.
+- **L'asymétrie supprimé / `[REDACTED]` est intentionnelle.** `archicollab-t3/packages/utils/src/sentry-noise.ts` argumente pour le retrait pur : « la présence même de la clé n'apprend rien d'utile ». C'est juste pour un en-tête retiré **nommément**. Ça ne l'est pas pour un en-tête attrapé **par sa forme**, où la visibilité est tout l'intérêt : sans marqueur, une règle trop large se découvre mal — l'objet est seulement plus petit. Chaque argument s'applique à son domaine.
+
+**Ce que cette décision laisse OUVERT** (une décision qui ne le dit pas se relit comme une garantie) :
+
+- tout **jeton de version ou d'algorithme placé après le mot** — la forme est générale et ne se réduit pas à un numéro : GitHub envoie `x-hub-signature-256`, Shopify `x-shopify-hmac-sha256` (où c'est `hmac-sha256` qui suit, pas `signature-<n>`). Ces deux-là sont listés ; les autres ne le sont pas ;
+- **tout en-tête en `-key` non nommé** — `key` étant exclu des suffixes, seuls `x-api-key`, `api-key`, `x-functions-key` et `x-goog-api-key` sont couverts ;
+- un en-tête qui **EST** un credential sans qu'aucun mot de son nom le dise : `x-vercel-protection-bypass` en est un, et il n'est couvert que parce qu'il est nommé (il plie en `xvercelprotectionbypass`, qui ne finit par aucun des cinq suffixes). Un équivalent non nommé passerait.
+- **du texte libre**, sur n'importe quelle surface : dans une chaîne, la rédaction par nom n'atteint qu'un nom écrit sous une **syntaxe qu'elle reconnaît**. Deux conditions, cumulatives : la paire s'écrit `k=v`, **ou** sa valeur est entre guillemets ; **et** le nom finit par un suffixe de credential. C'est le **nom** qui décide, le motif ne sert qu'à le *localiser* — mesuré à valeur constante : `zzz_token=csrf_AAA` est rédigé, `zzz=csrf_AAA` ne l'est pas, et il en va de même dans les quatre syntaxes. Donc `x-csrf-token: csrf_AAA` (valeur **non citée** après un deux-points) échoue sur la syntaxe et sort **en clair**, alors que `x-csrf-token: "csrf_AAA"` est pris. Rien d'autre ne le rattrape : `csrf_AAA` n'a aucun préfixe que `scrubText` reconnaisse ;
+- **une valeur qui n'est pas une chaîne**, par conception : `scrubEntry` exige `typeof v === "string"` pour que `tokenCount: 3` reste lisible. Mesuré — `{ "x-csrf-token": 12345 }` sort **en clair**. C'est un arbitrage assumé, pas un oubli, mais il n'est pas une couverture ;
+- **un nom porté par une chaîne sœur plutôt que par une clé** — troisième cas d'échappement, à côté des deux ci-dessus. Mesuré : `scrubDeep({ headers: [["x-csrf-token", "csrf_AAA"]] })` sort **en clair** — la paire est deux éléments de tableau, donc aucune clé ne porte le nom et aucune syntaxe reconnue ne les joint. Portée réelle faible, et il faut le dire pour ne pas alarmer pour rien : `signalServerless` type `headers` en `Record<string, string>`, il faut donc qu'un consommateur écrive `Object.entries(h)` à la main. Mais le chemin existe.
+
+**Et ce que cette décision couvre EN TROP.** Le bloc ci-dessus n'énumère que la sous-couverture ; une décision qu'on relira pendant des années doit nommer son coût **dans les deux sens**. L'exclusion de `key` est argumentée nommément ci-dessus ; `token` a la même classe de victimes et n'avait rien d'équivalent. Mesuré sur 1.4.0 :
+
+- les curseurs de pagination et de continuation en `-token`, qui ne sont pas des credentials, rendent tous `[REDACTED]` : `x-continuation-token` et `x-ms-continuation-token` (Azure / Cosmos), `x-next-page-token` et `x-page-token` (conventions Google). Ce n'est **pas** une fuite — c'est une perte de diagnostic, et elle est exactement ce que l'asymétrie `[REDACTED]` revendique : la clé reste, donc la morsure est **visible et contestable**, et une exception nommée peut être demandée. C'est le prix accepté en refusant une énumération, pas un effet de bord ;
+- en regard, ce qui **survit** et devait survivre : `signature-input`, l'en-tête de métadonnées de la RFC 9421, plie en `signatureinput` et ne finit par aucun des cinq suffixes — mesuré, il sort **inchangé**. C'est bien `endsWith` qui mord, jamais le fait de contenir le mot.
+
+La couverture annoncée est donc « énumération PLUS suffixe », jamais « par la forme ». Au-delà de ce qui est mesuré ici, cette décision ne prétend rien.
+
+Conception complète : [`docs/superpowers/specs/2026-09-30-header-credential-suffix-design.md`](./docs/superpowers/specs/2026-09-30-header-credential-suffix-design.md). Le plan du même nom porte un `## Errata` : quatre de ses affirmations ont été réfutées par la mesure, et son corps n'a pas été réécrit pour que ce fait reste lisible.
+
+**Conséquences si renversé** : revenir à l'énumération seule rouvre `x-csrf-token`, `x-xsrf-token`, `x-amz-signature`, `x-amz-credential`, `x-amz-security-token` et `x-goog-signature` **dans `event.request.headers`** — six credentials hors de la liste exacte et attrapés par le seul suffixe. La précision de surface est nécessaire : sur le chemin `extra` (`signalServerless` place les en-têtes dans `extra.headers`, que `before-send.ts:197` passe à `scrubDeep`), les six étaient **déjà** marqués avant 1.4.0, et deux d'entre eux — `x-amz-credential`, `x-amz-security-token` — figurent même nommément dans `SECRET_PARAMS` depuis v1.3.5. Dire « les six fuyaient » sans nommer `event.request.headers` serait faux. Inverser la précédence affaiblit les dix entrées existantes qui finissent déjà par un suffixe. Brancher `isSecretName` à la place du prédicat fait perdre la cible de redirection du `Location`.
 
 ---
 

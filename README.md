@@ -540,11 +540,15 @@ of the six — `x-amz-credential`, `x-amz-security-token` — are named in
 The two conditions are named because **this release closes neither**, and a
 caller who trusts the wrong one leaks:
 
-- **key-name redaction cannot see inside a string.** Measured:
-  `extra.raw = "x-csrf-token: csrf_AAA"` comes out **in the clear**, because
-  `csrf_AAA` carries no prefix `scrubText` recognises. `x-csrf-token=csrf_AAA`
-  and `"x-csrf-token":"csrf_AAA"` *are* caught — that cover is **pattern**-shaped,
-  not name-shaped, and it stops where the pattern stops. See
+- **inside a string, key-name redaction only reaches a name written in a
+  syntax it recognises.** Two conditions, both required: the pair reads `k=v`,
+  **or** its value is quoted; **and** the name ends in a credential suffix. The
+  **name** is what decides, the pattern only *locates* it — measured with the
+  value held constant, `zzz_token=csrf_AAA` is redacted and `zzz=csrf_AAA` is
+  not, alike in all four syntaxes. So `x-csrf-token: csrf_AAA` — an unquoted
+  value after a colon — fails the syntax condition and comes out **in the
+  clear**, while `x-csrf-token: "csrf_AAA"` is caught. Nothing else catches it
+  either: `csrf_AAA` carries no prefix `scrubText` recognises. See
   *PII inside messages, bodies and URLs* below;
 - **a non-string value escapes the suffix, by design.** `scrubEntry` requires
   `typeof v === "string"` so that `tokenCount: 3` stays readable; measured,

@@ -36,7 +36,8 @@ Suffixes retenus, repris à l'identique de `isSecretName` : `token`, `secret`, `
 
 ### Ce que la règle ferme, mesuré sur 70 en-têtes réels
 
-Six credentials authentiques, aujourd'hui dans **aucune** liste :
+Six credentials authentiques qui, **dans `event.request.headers`**, ne passent
+aujourd'hui par aucune liste :
 
 `x-csrf-token` · `x-xsrf-token` · `x-amz-signature` · `x-amz-credential` · `x-amz-security-token` · `x-goog-signature`
 
@@ -52,6 +53,15 @@ Six credentials authentiques, aujourd'hui dans **aucune** liste :
 **Ces quatre noms entrent donc dans la liste exacte, dans la même livraison.** La règle de forme ne peut pas les atteindre, et plier leurs noms le montre : `xhubsignature256`, `xshopifyhmacsha256`, `xfunctionskey`, `xgoogapikey` — aucun ne finit par un des cinq suffixes. Une règle qui les laisserait dehors en se présentant comme une couverture de classe reproduirait le défaut qu'on corrige.
 
 **La couverture annoncée est « énumération PLUS suffixe », jamais « par la forme ».**
+
+> **Surface, et non règle nouvelle.** La règle de suffixe existe déjà dans
+> `isSecretName`, sur les clés d'objet (`scrubEntry`) et les paramètres d'URL —
+> vérifié sur v1.3.5. Ce que ce changement ajoute, c'est la **troisième
+> surface** : `scrubHeaders`, le seul des trois chemins nettoyés par nom à
+> n'avoir que la liste exacte. Sur le chemin `extra`, où `scrubDeep` passe, les
+> six ci-dessus étaient déjà marqués, et `x-amz-credential` comme
+> `x-amz-security-token` figurent nommément dans `SECRET_PARAMS`. L'affirmation
+> « dans aucune liste » n'est vraie **que** de `event.request.headers`.
 
 ---
 

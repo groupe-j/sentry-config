@@ -158,7 +158,7 @@ node -e "
 
 > Aucun des deux n'est « sans changement observable » : retirer un en-tête nommé se voit aussi dans Sentry. La ligne de partage est la **prévisibilité** — un patch ne change que ce que son auteur a nommé ; un minor change ce qu'il n'a pas pu énumérer.
 
-Mesuré sur 1.4.0 : `scrubHeaders` rend `[REDACTED]` comme **valeur** d'un en-tête attrapé par son suffixe, là où 1.3.5 rendait la valeur réelle — la clé, elle, était déjà présente dans les deux versions. Une requête Sentry écrite sur cette valeur cesse de correspondre.
+Mesuré sur 1.4.0 : `scrubHeaders` rend `[REDACTED]` comme **valeur** d'un en-tête attrapé par son suffixe — donc dans `event.request.headers`, la surface dont il est le scrubber — là où 1.3.5 rendait la valeur réelle — la clé, elle, était déjà présente dans les deux versions. Une requête Sentry écrite sur cette valeur cesse de correspondre.
 
 La distinction date du 2026-09-30 (DECISIONS.md §19). Avant elle, cette section disait « ajout de redaction = patch » sans réserve, ce qui aurait classé 1.4.0 en patch.
 

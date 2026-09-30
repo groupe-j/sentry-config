@@ -12,9 +12,20 @@ This project follows [Semantic Versioning](https://semver.org/).
   plié finit par `token`, `secret`, `password`, `signature` ou `credential` voit
   sa **valeur** remplacée par `[REDACTED]`, sa **clé conservée**.
 
-  Ferme six credentials vérifiés hors de la liste exacte jusqu'ici :
+  **Ce qui change est une SURFACE, pas l'apparition d'une règle.** La règle de
+  suffixe existait déjà dans `isSecretName`, appliquée aux clés d'objet
+  (`scrubEntry`) et aux paramètres d'URL — mesuré sur v1.3.5. Des trois chemins
+  nettoyés **par nom**, celui des en-têtes était le seul à n'avoir que la liste
+  exacte, et `event.request.headers` ne reçoit pas `scrubDeep` (il reçoit
+  `scrubHeaders`, puis `scrubText` sur les valeurs).
+
+  Ferme donc six credentials **dans `event.request.headers`** :
   `x-csrf-token`, `x-xsrf-token`, `x-amz-signature`, `x-amz-credential`,
-  `x-amz-security-token`, `x-goog-signature`.
+  `x-amz-security-token`, `x-goog-signature`. **Là et seulement là** : sur le
+  chemin `extra` (`signalServerless` place les en-têtes dans `extra.headers`,
+  que `before-send` passe à `scrubDeep`), les six étaient déjà marqués avant
+  1.4.0, et `x-amz-credential` et `x-amz-security-token` figurent nommément
+  dans `SECRET_PARAMS` depuis v1.3.5.
 
   **Pourquoi une règle et pas un nom de plus** : les deux correctifs précédents
   (1.3.4 du 23/09, 1.3.5 du 29/09) avaient tous deux ajouté des noms après
@@ -59,7 +70,10 @@ This project follows [Semantic Versioning](https://semver.org/).
 - `isSecretName` consomme le même prédicat que les en-têtes. **Refactorisation
   pure**, épinglée par un test de caractérisation de treize cas : `user[token]`,
   `requestToken`, `magicLink`, `x-amz-credential` restent vrais ; `ipAddress`,
-  `firstNamespace`, `x-cache-key`, `x-idempotency-key` restent faux. Le
+  `firstNamespace`, `x-cache-key`, `x-idempotency-key` restent faux. Le verdict
+  `true` de `requestToken` n'est pas un effet de bord de cette version : il est
+  antérieur, et il rend périmé un contre-exemple de `DECISIONS.md` §3, dont
+  l'encart de portée le signale désormais. Le
   prédicat reçoit un nom **déjà normalisé**, et la responsabilité est chez
   l'appelant : refolder à l'intérieur serait un no-op (vérifié par mutation),
   tandis qu'un appelant qui passerait `foldKey(name)` au lieu de son
@@ -70,8 +84,13 @@ This project follows [Semantic Versioning](https://semver.org/).
 - Suite complète : **13 fichiers, 306 tests**, tous verts
   (`vitest run --no-file-parallelism --maxWorkers=1`).
 - `typecheck`, `lint` (0 erreur) et `build` à `0`.
-- `x-hub-signature-256` présent dans les **cinq** points d'entrée du `dist`
-  (`index.js`, `client.js`, `client-lazy.js`, `edge.js`, `server.js`).
+- `x-hub-signature-256` présent dans les **cinq entrées qui embarquent la
+  rédaction**, en **ESM et en CJS** : `index`, `client`, `client-lazy`, `edge`,
+  `server`, soit 10 des 12 bundles. `tsup.config.ts` déclare une **sixième**
+  entrée, `armed`, qui n'embarque aucune rédaction — `src/armed.ts` n'importe
+  rien, par construction — donc `armed.js` et `armed.cjs` ne la portent pas, et
+  c'est correct. Les `.cjs` sont contrôlés séparément : c'est eux que `require()`
+  résout.
 - `hasCredentialSuffix` **absent** de `src/index.ts` : son contrat d'entrée le
   rend impropre à la surface publique.
 

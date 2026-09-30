@@ -520,16 +520,28 @@ Two rules apply, **in this order**:
 The order matters: ten of the exact list's twenty-one entries already end in a
 credential suffix, and they must keep being *removed* rather than merely marked.
 
-The suffix rule closes six real credential headers that no list named before:
+`scrubHeaders` is the scrubber for **`event.request.headers`**, and that is the
+surface rule 2 changes. Six real credential headers used to reach Sentry in the
+clear **there**, because they went through no list:
+
 `x-csrf-token` · `x-xsrf-token` · `x-amz-signature` · `x-amz-credential` ·
 `x-amz-security-token` · `x-goog-signature`
+
+**Only there.** The suffix rule is not new to the package — `isSecretName` has
+applied the same five suffixes to object keys and URL parameters since before
+1.4.0, so anything reaching Sentry through `extra` (`signalServerless` puts
+headers in `extra.headers`) was already marked, and two of the six —
+`x-amz-credential`, `x-amz-security-token` — are named in `SECRET_PARAMS`
+outright. What `event.request.headers` does not get is `scrubDeep`: it gets
+`scrubHeaders`, then `scrubText` on the values. 1.4.0 closes **that** surface.
 
 **What the suffix rule does NOT reach**, named here on purpose — announcing
 shape-based coverage without its gaps is the very fault this replaced:
 
-- a version number after the word: `x-hub-signature-256` folds to
-  `xhubsignature256`, which ends in neither `signature` nor any other suffix —
-  hence GitHub's and Shopify's are listed by name above;
+- a version or algorithm token after the word — not always a number:
+  `x-hub-signature-256` folds to `xhubsignature256` and Shopify's
+  `x-shopify-hmac-sha256` to `xshopifyhmacsha256`, neither ending in
+  `signature` nor in any other suffix. Both are listed by name above;
 - names ending in `key`: `key` is **deliberately not a suffix**, or
   `x-idempotency-key` and `x-cache-key` would be eaten. API keys, Azure
   Functions and Google API keys are listed by name instead;
@@ -540,12 +552,20 @@ shape-based coverage without its gaps is the very fault this replaced:
 Coverage is therefore **"the list PLUS the suffix"**, never "by shape". Nothing
 beyond that is claimed here.
 
-Every header that **neither rule reaches** keeps both its key and its value,
-the value scrubbed by `scrubText` — `x-request-id`, `user-agent`, `referer`,
-`etag`, `location`, `x-cache-status` among them. And when a header *is* the
-secret, its name is the only net left as soon as the secret carries no
-recognisable prefix: such a key is a bare random string, which no value-level
-pattern can catch.
+A header that neither rule reaches comes out of `scrubHeaders` with its key and
+its value — `x-request-id`, `user-agent`, `referer`, `etag`, `x-cache-status`
+among them — and the pipeline then scrubs that value with `scrubText`.
+
+That statement is about `scrubHeaders` **only**, and the distinction is not
+academic: `location` survives `scrubHeaders` (the `keeps Location` test pins
+exactly that), yet the same header inside `extra.headers` comes back
+`[REDACTED]`, because `scrubDeep` consults the PII key list where `location`
+means a person's whereabouts. Same name, two surfaces, two verdicts — which is
+why the header path must never call `isSecretName`.
+
+And when a header *is* the secret, its name is the only net left as soon as the
+secret carries no recognisable prefix: such a key is a bare random string, which
+no value-level pattern can catch.
 
 Adding an entry: the header must **be** the secret. One that merely *carries* one
 (`referer` with a token in its query) stays — its value is scrubbed by

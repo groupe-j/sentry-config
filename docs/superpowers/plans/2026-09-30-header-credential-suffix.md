@@ -978,8 +978,15 @@ la soutenait**.
 
 ### 1. Le contrat d'entrée du prédicat — mauvaise justification
 
-**Écrit ici** (§Architecture, et lignes 120, 199, 692) : « si le prédicat faisait
-son propre `foldKey`, `isSecretName` perdrait les noms entre crochets ».
+**Écrit ici** à **cinq** endroits : §Architecture (ligne 7), les commentaires
+prescrits lignes 120 et 199, la puce de §19 ligne 692, et — recensée après coup —
+**ligne 807**, dans le texte de CHANGELOG que ce plan prescrivait (« normaliser en
+interne aurait fait perdre les noms entre crochets »). Cette cinquième
+occurrence n'était couverte par aucun addendum : elle a été corrigée à la rédaction,
+mais elle compte dans le décompte, parce qu'un brief non relu l'aurait recopiée.
+
+L'affirmation : « si le prédicat faisait son propre `foldKey`, `isSecretName`
+perdrait les noms entre crochets ».
 
 **Mesuré** (tâche 1, par mutation) : faux. `normaliseName` vaut `foldKey(name)`
 **puis** le retrait de `.` `[` `]`, donc le prédicat reçoit une chaîne déjà

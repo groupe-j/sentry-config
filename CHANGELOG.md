@@ -14,18 +14,42 @@ This project follows [Semantic Versioning](https://semver.org/).
 
   **Ce qui change est une SURFACE, pas l'apparition d'une règle.** La règle de
   suffixe existait déjà dans `isSecretName`, appliquée aux clés d'objet
-  (`scrubEntry`) et aux paramètres d'URL — mesuré sur v1.3.5. Des trois chemins
-  nettoyés **par nom**, celui des en-têtes était le seul à n'avoir que la liste
-  exacte, et `event.request.headers` ne reçoit pas `scrubDeep` (il reçoit
-  `scrubHeaders`, puis `scrubText` sur les valeurs).
+  (`scrubEntry`), aux paramètres d'URL (`isSecretParam`, deux sites) et aux
+  paires à valeur **citée** dans du texte libre (`QUOTED_KV`) — mesuré sur
+  v1.3.5, et cette énumération n'est pas donnée pour exhaustive. Des chemins
+  nettoyés **par nom** que les hooks appliquent à un événement, celui des
+  en-têtes était le seul à n'avoir que la liste exacte, et
+  `event.request.headers` ne reçoit pas `scrubDeep` (il reçoit `scrubHeaders`,
+  puis `scrubText` sur les valeurs). Liste des surfaces et de leur portée :
+  DECISIONS.md §19.
 
   Ferme donc six credentials **dans `event.request.headers`** :
   `x-csrf-token`, `x-xsrf-token`, `x-amz-signature`, `x-amz-credential`,
-  `x-amz-security-token`, `x-goog-signature`. **Là et seulement là** : sur le
-  chemin `extra` (`signalServerless` place les en-têtes dans `extra.headers`,
-  que `before-send` passe à `scrubDeep`), les six étaient déjà marqués avant
-  1.4.0, et `x-amz-credential` et `x-amz-security-token` figurent nommément
-  dans `SECRET_PARAMS` depuis v1.3.5.
+  `x-amz-security-token`, `x-goog-signature`. **Cette surface-là, et sous deux
+  conditions.** Sur le chemin `extra` (`signalServerless` place les en-têtes
+  dans `extra.headers`, que `before-send` passe à `scrubDeep`), une valeur de
+  type **chaîne** portée par une **clé** d'objet était déjà marquée avant
+  1.4.0, et `x-amz-credential` comme `x-amz-security-token` figurent
+  nommément dans `SECRET_PARAMS` depuis v1.3.5.
+
+  **Mais ni 1.4.0 ni les versions précédentes ne ferment ce qui échappe à ces
+  deux conditions** — mesuré sur 1.4.0, et nommé ici, à l'endroit de
+  l'affirmation, parce qu'un consommateur qui lit « déjà couvert ailleurs »
+  en déduirait qu'il n'a plus aucune surface à vérifier :
+
+  - `scrubDeep({ raw: "x-csrf-token: csrf_AAA" })` sort **en clair** : dans du
+    texte libre, il faut que la paire s'écrive `k=v` **ou** que sa valeur soit
+    citée. La même paire avec guillemets, `x-csrf-token: "csrf_AAA"`, est prise ;
+  - `scrubDeep({ "x-csrf-token": 12345 })` sort **en clair** : `scrubEntry`
+    exige `typeof v === "string"`, pour que `tokenCount: 3` reste lisible ;
+  - `scrubDeep({ headers: [["x-csrf-token", "csrf_AAA"]] })` sort **en
+    clair** : le nom est dans une chaîne sœur, pas dans une clé. Portée
+    réelle faible — `signalServerless` type `headers` en
+    `Record<string, string>`, il faut donc qu'un consommateur écrive
+    `Object.entries(h)` à la main — mais le chemin existe.
+
+  Ce que la règle couvre **en trop**, et ce qu'elle ne couvre pas :
+  DECISIONS.md §19, bloc « laisse OUVERT ».
 
   **Pourquoi une règle et pas un nom de plus** : les deux correctifs précédents
   (1.3.4 du 23/09, 1.3.5 du 29/09) avaient tous deux ajouté des noms après

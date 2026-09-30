@@ -970,8 +970,17 @@ Ce plan **n'est pas réécrit**. Il est le compte rendu de ce qui a été *deman
 récrire son corps effacerait le fait qu'il était faux, et ce fait est de
 l'information — il dit où un plan écrit d'avance se trompe. Quatre de ses
 affirmations ont été réfutées par la mesure pendant l'exécution. La référence
-durable, elle, est la **spec**, corrigée dans son corps, et c'est elle que
-`DECISIONS.md` §19 cite.
+durable, elle, est la **spec**, et c'est elle que `DECISIONS.md` §19 cite.
+
+Mais elle n'a pas été corrigée sur tout au même moment, et l'affirmer serait
+refaire l'erreur que cet Errata recense. Son corps a été corrigé sur plusieurs
+points, **pas sur celui-ci** : le décompte « des trois chemins nettoyés par
+nom » — réfuté, il y en a au moins quatre : `scrubEntry`, `isSecretParam` à
+deux sites, `QUOTED_KV` — a survécu dans la spec **et** dans le CHANGELOG après
+avoir été retiré de `DECISIONS.md`. Pendant ce temps, §19 renvoyait donc un
+lecteur vers un document qui la contredisait. Les deux occurrences survivantes
+sont retirées depuis la vague de correction du 2026-09-30. Une spec vaut comme
+référence parce qu'on la corrige, pas parce qu'elle serait juste d'avance.
 
 Les quatre avaient la même forme : **une affirmation plus large que la mesure qui
 la soutenait**.

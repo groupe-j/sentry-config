@@ -527,17 +527,17 @@ clear **there**, because they went through no list:
 `x-csrf-token` · `x-xsrf-token` · `x-amz-signature` · `x-amz-credential` ·
 `x-amz-security-token` · `x-goog-signature`
 
-**That surface, under two conditions.** The suffix rule is not new to the
-package: `isSecretName` has applied the same five suffixes to object keys, to
-URL parameters and query values, and to quoted `"key":"value"` pairs inside free
-text since before 1.4.0. So a **string** value reaching Sentry through `extra`
-(`signalServerless` puts headers in `extra.headers`) was already marked, and two
-of the six — `x-amz-credential`, `x-amz-security-token` — are named in
-`SECRET_PARAMS` outright. What `event.request.headers` does not get is
-`scrubDeep`: it gets `scrubHeaders`, then `scrubText` on the values. 1.4.0 closes
-**that** surface.
+**That surface, and only under the conditions named below.** The suffix rule is
+not new to the package: `isSecretName` has applied the same five suffixes to
+object keys, to URL parameters and query values, and to quoted `"key":"value"`
+pairs inside free text since before 1.4.0. So a **string** value carried by an
+object **key** and reaching Sentry through `extra` (`signalServerless` puts
+headers in `extra.headers`) was already marked, and two of the six —
+`x-amz-credential`, `x-amz-security-token` — are named in `SECRET_PARAMS`
+outright. What `event.request.headers` does not get is `scrubDeep`: it gets
+`scrubHeaders`, then `scrubText` on the values. 1.4.0 closes **that** surface.
 
-The two conditions are named because **this release closes neither**, and a
+Those conditions are named because **this release closes none of them**, and a
 caller who trusts the wrong one leaks:
 
 - **inside a string, key-name redaction only reaches a name written in a
@@ -552,7 +552,14 @@ caller who trusts the wrong one leaks:
   *PII inside messages, bodies and URLs* below;
 - **a non-string value escapes the suffix, by design.** `scrubEntry` requires
   `typeof v === "string"` so that `tokenCount: 3` stays readable; measured,
-  `{ "x-csrf-token": 12345 }` therefore comes out in the clear too.
+  `{ "x-csrf-token": 12345 }` therefore comes out in the clear too;
+- **the name can sit in a sister string instead of in a key.** Measured,
+  `scrubDeep({ headers: [["x-csrf-token", "csrf_AAA"]] })` comes out in the
+  clear: the pair is two array elements, so no key carries the name and no
+  recognised syntax joins them. Reach is small, and worth saying so as not to
+  alarm for nothing — `signalServerless` types `headers` as
+  `Record<string, string>`, so this needs a caller who writes
+  `Object.entries(h)` by hand. The path exists all the same.
 
 **What the suffix rule does NOT reach**, named here on purpose — announcing
 shape-based coverage without its gaps is the very fault this replaced:
@@ -581,6 +588,15 @@ exactly that), yet the same header inside `extra.headers` comes back
 `[REDACTED]`, because `scrubDeep` consults the PII key list where `location`
 means a person's whereabouts. Same name, two surfaces, two verdicts — which is
 why the header path must never call `isSecretName`.
+
+The **spelling of the marker** differs across those same two surfaces, and that
+is a contract surface too: a Sentry search written on one literal stops matching
+the other. `x-csrf-token` is caught by its suffix on **both** paths, and yet,
+measured on 1.4.0, it comes back `[REDACTED]` from `scrubHeaders`
+(`event.request.headers`) and `[redacted]` from `scrubDeep` (`extra.headers`):
+key-name redaction and value-level scrubbing use deliberately different casings
+(`REDACTED` vs `REDACTED_VALUE`), so a reader can tell which rule fired. Same
+header, same catch, two literals to search for.
 
 And when a header *is* the secret, its name is the only net left as soon as the
 secret carries no recognisable prefix: such a key is a bare random string, which

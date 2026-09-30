@@ -55,13 +55,21 @@ aujourd'hui par aucune liste :
 **La couverture annoncée est « énumération PLUS suffixe », jamais « par la forme ».**
 
 > **Surface, et non règle nouvelle.** La règle de suffixe existe déjà dans
-> `isSecretName`, sur les clés d'objet (`scrubEntry`) et les paramètres d'URL —
-> vérifié sur v1.3.5. Ce que ce changement ajoute, c'est la **troisième
-> surface** : `scrubHeaders`, le seul des trois chemins nettoyés par nom à
-> n'avoir que la liste exacte. Sur le chemin `extra`, où `scrubDeep` passe, les
-> six ci-dessus étaient déjà marqués, et `x-amz-credential` comme
-> `x-amz-security-token` figurent nommément dans `SECRET_PARAMS`. L'affirmation
-> « dans aucune liste » n'est vraie **que** de `event.request.headers`.
+> `isSecretName`, sur les clés d'objet (`scrubEntry`), les paramètres d'URL
+> (`isSecretParam`, deux sites) et les paires à valeur **citée** dans du texte
+> libre (`QUOTED_KV`) — vérifié sur v1.3.5, et cette énumération n'est pas
+> donnée pour exhaustive. Ce que ce changement ajoute, c'est **une surface de
+> plus** : `scrubHeaders`, le seul des chemins nettoyés par nom que les hooks
+> appliquent à un événement à n'avoir que la liste exacte. Sur le chemin
+> `extra`, où `scrubDeep` passe, les six ci-dessus étaient déjà marqués, et
+> `x-amz-credential` comme `x-amz-security-token` figurent nommément dans
+> `SECRET_PARAMS`. L'affirmation « dans aucune liste » n'est donc vraie de
+> `event.request.headers` que **pour une valeur de type chaîne portée par une
+> clé d'objet** : mesuré sur 1.4.0, `scrubDeep({ raw: "x-csrf-token:
+> csrf_AAA" })`, `scrubDeep({ "x-csrf-token": 12345 })` et
+> `scrubDeep({ headers: [["x-csrf-token", "csrf_AAA"]] })` sortent tous trois
+> **en clair** sur le chemin `extra`. Les trois cas sont détaillés dans
+> `DECISIONS.md` §19, bloc « laisse OUVERT ».
 
 ---
 

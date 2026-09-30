@@ -404,7 +404,7 @@ time like any other `extra`, so PII keys are scrubbed there too.
 
 > `optional` **flushTimeoutMs?**: `number`
 
-Defined in: [serverless.ts:92](https://github.com/groupe-j/sentry-config/blob/main/src/serverless.ts#L92)
+Defined in: [serverless.ts:97](https://github.com/groupe-j/sentry-config/blob/main/src/serverless.ts#L97)
 
 Max ms to wait for the transport queue to drain. Default: 2000.
 
@@ -412,12 +412,17 @@ Max ms to wait for the transport queue to drain. Default: 2000.
 
 > `optional` **headers?**: `Record`\<`string`, `string`\>
 
-Defined in: [serverless.ts:90](https://github.com/groupe-j/sentry-config/blob/main/src/serverless.ts#L90)
+Defined in: [serverless.ts:95](https://github.com/groupe-j/sentry-config/blob/main/src/serverless.ts#L95)
 
 Raw request headers to attach for debugging. Scrubbed with `scrubHeaders`
-before attachment — credential-bearing headers (`authorization`, `cookie`,
-webhook signatures) are dropped entirely; the rest survive under
-`extra.headers`. Reuses the package's canonical scrubber rather than
+before attachment, which since 1.4.0 has **three** outcomes, not two: a
+header in the exact list (`authorization`, `cookie`, named webhook
+signatures) is **dropped entirely**; a header whose folded name ends in a
+credential suffix (`token`, `secret`, `password`, `signature`,
+`credential`) keeps its **key** and gets `[REDACTED]` as its **value**;
+anything else survives untouched. What remains — marked or untouched —
+lands under `extra.headers`, where `beforeSend` scrubs it again like any
+other `extra`. Reuses the package's canonical scrubber rather than
 re-implementing it per route.
 
 ##### level?
@@ -1338,7 +1343,7 @@ reported. Fails open so a new server-fault code is never silently dropped.
 
 > **signalServerless**(`message`, `defer`, `options?`): `void`
 
-Defined in: [serverless.ts:102](https://github.com/groupe-j/sentry-config/blob/main/src/serverless.ts#L102)
+Defined in: [serverless.ts:107](https://github.com/groupe-j/sentry-config/blob/main/src/serverless.ts#L107)
 
 Capture a serverless signal and hand a bounded transport flush to `defer`.
 

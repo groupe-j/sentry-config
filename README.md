@@ -527,13 +527,28 @@ clear **there**, because they went through no list:
 `x-csrf-token` · `x-xsrf-token` · `x-amz-signature` · `x-amz-credential` ·
 `x-amz-security-token` · `x-goog-signature`
 
-**Only there.** The suffix rule is not new to the package — `isSecretName` has
-applied the same five suffixes to object keys and URL parameters since before
-1.4.0, so anything reaching Sentry through `extra` (`signalServerless` puts
-headers in `extra.headers`) was already marked, and two of the six —
-`x-amz-credential`, `x-amz-security-token` — are named in `SECRET_PARAMS`
-outright. What `event.request.headers` does not get is `scrubDeep`: it gets
-`scrubHeaders`, then `scrubText` on the values. 1.4.0 closes **that** surface.
+**That surface, under two conditions.** The suffix rule is not new to the
+package: `isSecretName` has applied the same five suffixes to object keys, to
+URL parameters and query values, and to quoted `"key":"value"` pairs inside free
+text since before 1.4.0. So a **string** value reaching Sentry through `extra`
+(`signalServerless` puts headers in `extra.headers`) was already marked, and two
+of the six — `x-amz-credential`, `x-amz-security-token` — are named in
+`SECRET_PARAMS` outright. What `event.request.headers` does not get is
+`scrubDeep`: it gets `scrubHeaders`, then `scrubText` on the values. 1.4.0 closes
+**that** surface.
+
+The two conditions are named because **this release closes neither**, and a
+caller who trusts the wrong one leaks:
+
+- **key-name redaction cannot see inside a string.** Measured:
+  `extra.raw = "x-csrf-token: csrf_AAA"` comes out **in the clear**, because
+  `csrf_AAA` carries no prefix `scrubText` recognises. `x-csrf-token=csrf_AAA`
+  and `"x-csrf-token":"csrf_AAA"` *are* caught — that cover is **pattern**-shaped,
+  not name-shaped, and it stops where the pattern stops. See
+  *PII inside messages, bodies and URLs* below;
+- **a non-string value escapes the suffix, by design.** `scrubEntry` requires
+  `typeof v === "string"` so that `tokenCount: 3` stays readable; measured,
+  `{ "x-csrf-token": 12345 }` therefore comes out in the clear too.
 
 **What the suffix rule does NOT reach**, named here on purpose — announcing
 shape-based coverage without its gaps is the very fault this replaced:

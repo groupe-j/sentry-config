@@ -1,5 +1,5 @@
 # Dependabot — config par défaut groupe-j
-# Pour monorepos (Turborepo), ajouter des entrées par workspace en bas du fichier.
+# Monorepos : UNE seule entrée npm, avec `directories:` — voir le pied du fichier.
 #
 # Le bloc `registries:` donne à Dependabot (security ET version updates) l'accès
 # au registry privé GitHub Packages pour résoudre les @groupe-j/*. Sans lui,
@@ -48,33 +48,76 @@ updates:
       prefix-development: "chore(deps-dev)"
       include: "scope"
     groups:
-      production-minor-patch:
-        dependency-type: "production"
-        update-types: ["minor", "patch"]
-      dev-minor-patch:
-        dependency-type: "development"
+      # ── UN SEUL groupe mineur/patch écrit `pnpm-lock.yaml` — GRO-1579 ────
+      # Sur un dépôt pnpm, TOUTE PR Dependabot réécrit le verrou. L'auto-fusion
+      # fusionne la première PR verte ; ses sœurs passent en conflit, et une PR
+      # en conflit n'a plus ni merge ref, ni CI, ni auto-fusion : elle est gelée
+      # sans le moindre rouge. La seule grandeur réglable est le NOMBRE
+      # d'écrivains auto-fusionnables du verrou.
+      #
+      # DEUX moitiés, dont aucune ne suffit seule :
+      #   (1) `all-minor-patch` SANS `patterns:` ;
+      #   (2) `update-types: ["major"]` sur CHAQUE groupe de famille.
+      #
+      # Dependabot affecte une dépendance au groupe le plus SPÉCIFIQUE, où qu'il
+      # soit déclaré (`dependabot-core`, lu à `4725d25`) : match exact 1000 ·
+      # groupe sans `patterns:` 500 · joker < 100 · `"*"` = 1, le plus BAS. Les
+      # groupes dont les `update-types` ne se recoupent pas ne sont pas comparés
+      # entre eux : borner les familles aux majeures SUPPRIME la concurrence au
+      # lieu de chercher à la gagner. Une famille non bornée reste candidate aux
+      # mineures si elle matche en exact (lu dans le code, non mesuré), ou
+      # devient un groupe mort dont les majeures repartent en PR unitaires si
+      # elle matche par jokers (mesuré le 2026-10-12, blog-generator#61).
+      #
+      # Familles : seules celles du gabarit qui matchent une dépendance de ce
+      # dépôt (relevé du 2026-10-13 sur `package.json`, hors peerDependencies,
+      # que Dependabot ne parse pas). En ajouter une, c'est lui donner son
+      # `update-types: ["major"]`.
+      #
+      # CE QUE CECI NE CORRIGE PAS : les majeures ne sont jamais auto-fusionnées,
+      # et chaque fusion de `all-minor-patch` les remet en conflit. Leur sortie
+      # est un geste HUMAIN : commenter `@dependabot recreate` (une application
+      # est refusée, `dependabot-core#9147`). Ne JAMAIS fermer une PR Dependabot
+      # à la main : la fermeture enregistre un ignore permanent de la version.
+      # 🪤 Le cooldown (7 jours, 30 pour une majeure) retarde l'effet : il ne
+      # s'observe pas le lendemain.
+      #
+      # 🚫 Ni `patterns:` ni `dependency-type:` sur `all-minor-patch`.
+      # 🚫 Pas de famille sans `update-types: ["major"]`.
+      # Mesures et arbitrage : groupe-j/dev-conventions,
+      # `docs/dependabot-lockfile-fratricide.md` (§4 et §4 bis). Garde :
+      # `gjdc check`, ligne « Dependabot écrivains du verrou ».
+      all-minor-patch:
         update-types: ["minor", "patch"]
       next:
         patterns: ["next", "@next/*", "eslint-config-next"]
-      react:
-        patterns: ["react", "react-dom", "@types/react*"]
+        update-types: ["major"]
       types:
         patterns: ["@types/*"]
         exclude-patterns: ["@types/react*"]
-      sanity:
-        patterns: ["@sanity/*", "next-sanity", "sanity"]
+        update-types: ["major"]
       sentry:
         patterns: ["@sentry/*"]
-      prisma:
-        patterns: ["@prisma/*", "prisma"]
-      better-auth:
-        patterns: ["better-auth", "@better-auth/*"]
-      tailwind:
-        patterns: ["tailwindcss", "@tailwindcss/*", "tailwind-merge"]
-      radix:
-        patterns: ["@radix-ui/*"]
-      trpc:
-        patterns: ["@trpc/*"]
+        update-types: ["major"]
+      vitest:
+        patterns: ["vitest", "@vitest/*"]
+        update-types: ["major"]
+      eslint:
+        patterns: ["eslint", "eslint-*", "@eslint/*", "typescript-eslint", "@typescript-eslint/*"]
+        exclude-patterns: ["eslint-config-next"]
+        update-types: ["major"]
+      # Sécurité : `applies-to` vaut `version-updates` par défaut. Sans ce
+      # groupe, les correctifs de faille partent en PR unitaires, chacune
+      # écrivain du verrou — et le cooldown ne les espace jamais. Pas
+      # d'`update-types:`, volontairement : une majeure rend le lot majeur, donc
+      # relu par un humain. UN SEUL groupe `security-updates` par entrée.
+      # ⚖️ Ce groupe est LUI-MÊME un écrivain auto-fusionnable quand le lot est
+      # entièrement mineur/patch : le résultat réel est « un écrivain de version
+      # + un écrivain de sécurité », pas « un seul écrivain ». Son effet sur un
+      # vrai lot de sécurité n'est pas encore mesuré.
+      all-security:
+        applies-to: security-updates
+        patterns: ["*"]
     ignore:
       # Contrôle manuel sur les majors critiques (breaking changes potentiels)
       # typescript : `tsup` EMBARQUE `rollup-plugin-dts@6.1.1` dans son artefact
@@ -122,13 +165,11 @@ updates:
       # Le dependency-name d'un reusable workflow est le CHEMIN COMPLET : glob requis.
       - dependency-name: "groupe-j/.github/*"
 
-# ─── Monorepos : ajouter ces entrées si pnpm-workspace.yaml présent ───
-#  - package-ecosystem: "npm"
-#    directory: "/apps/web"
-#    schedule: { interval: "weekly", day: "monday" }
-#    groups: { minor-patch: { update-types: ["minor", "patch"] } }
-#
-#  - package-ecosystem: "npm"
-#    directory: "/packages/db"
-#    schedule: { interval: "weekly", day: "monday" }
-#    groups: { minor-patch: { update-types: ["minor", "patch"] } }
+# ─── Monorepos (pnpm-workspace.yaml) : UN verrou, donc UNE entrée npm ───
+# 🚫 Ne PAS ajouter une entrée npm par répertoire (`/apps/web`,
+# `/packages/db`…), chacune avec son groupe `minor-patch` : un workspace pnpm
+# n'a qu'UN `pnpm-lock.yaml`, à la racine. N entrées = N PR auto-fusionnables
+# sur le MÊME verrou.
+# À la place : garder l'UNIQUE entrée npm ci-dessus et y remplacer
+# `directory: "/"` par `directories:` (`"/"`, `"/apps/*"`, `"/packages/*"`).
+# Cf. le pied du gabarit `github/dependabot.yml` de groupe-j/dev-conventions.

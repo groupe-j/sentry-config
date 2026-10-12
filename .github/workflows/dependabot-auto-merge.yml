@@ -431,10 +431,27 @@ jobs:
       # tourne normalement et se contente d'ANNONCER les PRs gelees. Aucun depot
       # ne casse parce que l'application n'y est pas installee.
       #
-      # ⚠️ Que Dependabot honore l'identite d'une APPLICATION (qui n'est pas un
-      # « user ») n'est PAS garanti par sa documentation. La detection de refus
-      # plus bas tranche la question a la premiere execution reelle, et emet un
-      # ::warning:: au lieu de compter une reussite imaginaire.
+      # 🚨 REPONSE TRANCHEE LE 2026-09-30 : NON, Dependabot n'honore PAS
+      # l'identite d'une application. La demande de support amont,
+      # dependabot-core#9147 « Support Dependabot commands by GitHub apps », est
+      # OUVERTE depuis le 2024-02-27 (etat verifie ce jour-la). Son existence
+      # meme demontre que ce n'est pas supporte. Le controle porte sur
+      # l'IDENTITE DE L'AUTEUR du commentaire, pas sur les droits du jeton.
+      #
+      # Cette etape est donc conservee mais tenue pour INERTE en pratique : la
+      # detection de refus plus bas le constate et le NOMME, au lieu de compter
+      # une reussite imaginaire. L'identite qui marche est un PAT
+      # d'UTILISATEUR — ce qui suppose de remplacer cette etape, puisque
+      # `create-github-app-token` ne sait produire qu'un jeton d'application.
+      #
+      # ⚠️ NE PAS CONFONDRE DEUX MECANISMES. (a) « un evenement produit par
+      # GITHUB_TOKEN ne declenche pas de workflow » est une regle des ACTIONS,
+      # documentee, qu'un jeton d'application resout bien — c'est pour ca qu'elle
+      # figure partout. (b) « Dependabot refuse les commentaires non humains »
+      # est une regle du SERVICE, ecrite NULLE PART dans sa documentation, et
+      # qu'un jeton d'application ne resout PAS. Passer a une application corrige
+      # (a), qui n'etait pas le probleme, et laisse (b) entier. C'est la
+      # confusion qui a fait installer cette etape.
       #
       # ⚠️ La condition teste les DEUX entrees, et l'etape est explicitement
       # non bloquante. Sans cela, la promesse ci-dessus etait fausse dans deux
@@ -508,6 +525,31 @@ jobs:
           echo "PRs Dependabot ouvertes : $count"
           merged=0
           recreated=0
+          # ── Compteurs d'IMPUISSANCE — GRO-1579 ─────────────────────────────
+          # Une PR gelee que ce job ne peut PAS degeler est un ECHEC, pas une
+          # information. Jusqu'au 2026-09-30 elle ne produisait qu'un
+          # `::warning::` sur un run conclu `success` : linegroup a ainsi tenu
+          # 10 PR gelees sous une passe quotidienne VERTE (run 36580502962,
+          # « 0 PR(s) mergee(s), 0 en conflit relancee(s), sur 10 examinee(s) »).
+          #
+          # QUATRE compteurs, parce que le gel a quatre chemins et qu'en n'en
+          # comptant que deux on rejouait le meme faux vert au SECOND passage :
+          # une PR deja marquee par la veille sortait par `skip` sans rien
+          # incrementer, donc `gelees=0`, donc run VERT sur dix PR toujours
+          # gelees. Le compteur doit suivre l'ETAT (gelee, non reparee), pas
+          # l'evenement (on a poste aujourd'hui).
+          #
+          # ⚠️ Ce rouge NE se ferme PAS en installant une application — voir
+          # l'etape du jeton plus haut : Dependabot valide l'IDENTITE DE L'AUTEUR
+          # du commentaire, et dependabot-core#9147 est ouverte depuis
+          # 2024-02-27. Il se ferme par un geste HUMAIN : commenter
+          # `@dependabot recreate` sur les PR nommees (mesure du 2026-09-30 :
+          # 12 PR sur 15 reparees ainsi). C'est cela qui le rend actionnable ;
+          # une remediation annoncee qui ne marche pas ferait desactiver la regle.
+          gelees_sans_jeton=0
+          gelees_refusees=0
+          gelees_deja_demandees=0
+          gelees_indeterminees=0
 
           # Lecture sur le descripteur 3, pas sur stdin : les `gh` appeles dans
           # la boucle heriteraient sinon du fichier comme entree standard et
@@ -577,7 +619,15 @@ jobs:
               marker="<!-- gjdc-recreate:$oid -->"
               if gh pr view "$number" --repo "$REPO" --json comments \
                    --jq '[.comments[].body] | join("\n")' | grep -qF "$marker"; then
-                echo "PR #$number : en conflit, recreate deja demande pour $oid — skip."
+                # 🚨 CE CHEMIN EST LE FAUX VERT DU SECOND PASSAGE. Le marqueur
+                # dit « on a deja demande le recreate pour ce head » ; la PR est
+                # pourtant TOUJOURS en conflit, donc Dependabot ne l'a pas menee
+                # a bien. Cas courant : le cooldown (`default-days: 7`) le fait
+                # echouer en `update_no_longer_possible` sur tout ce qui vient
+                # d'etre monte. Sans comptage ici, la passe du lendemain sortait
+                # VERTE sur un stock intact — exactement le run 36580502962.
+                echo "::error title=PR Dependabot gelee::PR #$number est en conflit ET le recreate a deja ete demande pour $oid sans effet. Dependabot ne l'a pas regeneree (cause probable : cooldown → update_no_longer_possible). Degel : qu'un HUMAIN commente '@dependabot recreate', ou fusionner la PR a la main apres resolution du verrou."
+                gelees_deja_demandees=$((gelees_deja_demandees + 1))
                 continue
               fi
 
@@ -586,7 +636,8 @@ jobs:
               # passe — sans marqueur, pour qu'une passe ulterieure reessaie des
               # que l'application est installee.
               if [ -z "${CMD_TOKEN:-}" ]; then
-                echo "::warning title=PR Dependabot gelee::PR #$number est en conflit et ne peut pas etre relancee : aucun jeton d'application configure (vars.DEPENDABOT_CMD_APP_ID + secrets.DEPENDABOT_CMD_APP_PRIVATE_KEY). Commenter '@dependabot recreate' a la main en attendant."
+                echo "::error title=PR Dependabot gelee::PR #$number est en conflit et ne peut pas etre relancee : aucun jeton configure (vars.DEPENDABOT_CMD_APP_ID + secrets.DEPENDABOT_CMD_APP_PRIVATE_KEY). Degel : qu'un HUMAIN commente '@dependabot recreate' — une application serait refusee, cf. dependabot-core#9147, ouverte depuis 2024-02-27."
+                gelees_sans_jeton=$((gelees_sans_jeton + 1))
                 continue
               fi
 
@@ -674,7 +725,8 @@ jobs:
                   GH_TOKEN="$CMD_TOKEN" \
                     gh api -X DELETE "repos/${REPO}/issues/comments/${cid}" >/dev/null \
                     || echo "::warning title=Nettoyage de commentaire echoue::PR #$number : le commentaire $cid n'a pas pu etre supprime (404 deja efface, 403 portee du jeton, ou reseau). Le refus de Dependabot est signale ci-dessous ; le commentaire est a retirer a la main."
-                  echo "::warning title=PR Dependabot gelee::PR #$number est en conflit et Dependabot a REFUSE la commande postee par l'application. Son identite n'est donc pas reconnue comme « user with push access » — commenter '@dependabot recreate' a la main, ou passer a un PAT utilisateur."
+                  echo "::error title=PR Dependabot gelee::PR #$number est en conflit et Dependabot a REFUSE la commande postee par l'application — resultat ATTENDU : dependabot-core#9147 « Support Dependabot commands by GitHub apps » est ouverte depuis 2024-02-27. Degel : qu'un HUMAIN commente '@dependabot recreate', ou remplacer l'etape 'create-github-app-token' par un PAT d'utilisateur."
+                  gelees_refusees=$((gelees_refusees + 1))
                   ;;
                 accepte)
                   echo "PR #$number : en conflit → '@dependabot recreate' accepte."
@@ -692,7 +744,13 @@ jobs:
                   GH_TOKEN="$CMD_TOKEN" \
                     gh api -X DELETE "repos/${REPO}/issues/comments/${cid}" >/dev/null \
                     || echo "::warning title=Nettoyage de commentaire echoue::PR #$number : le commentaire $cid n'a pas pu etre supprime (404 deja efface, 403 portee du jeton, ou reseau). Le marqueur peut subsister et bloquer une passe ulterieure — le retirer a la main."
-                  echo "::warning title=Recreate Dependabot indetermine::PR #$number : aucune reponse de Dependabot correlee a notre commande apres 60 s. Ni acceptee, ni refusee — marqueur retire pour qu'une passe ulterieure reessaie."
+                  # La PR est en conflit MAINTENANT et ce job ne l'a pas
+                  # reparee : elle compte, meme si le recreate aboutit plus tard.
+                  # La passe du lendemain la verra CLEAN et ne la comptera plus.
+                  # Compter l'evenement (« on a poste ») au lieu de l'etat
+                  # (« elle est gelee ») rendait le job vert sur un stock gele.
+                  echo "::error title=Recreate Dependabot indetermine::PR #$number : en conflit, et aucune reponse de Dependabot correlee a notre commande apres 60 s. Ni acceptee, ni refusee — marqueur retire pour qu'une passe ulterieure reessaie. Degel immediat : qu'un HUMAIN commente '@dependabot recreate'."
+                  gelees_indeterminees=$((gelees_indeterminees + 1))
                   ;;
               esac
               continue
@@ -798,6 +856,54 @@ jobs:
           done 3< "$RUNNER_TEMP/dependabot-prs.jsonl"
 
           echo "Rattrapage termine : $merged PR(s) mergee(s), $recreated en conflit relancee(s), sur $count examinee(s)."
+
+          # ── VERDICT — le rouge vient APRES le travail utile (GRO-1579) ─────
+          # L'ordre n'est pas cosmetique : sortir en erreur au moment ou la PR
+          # gelee est rencontree arreterait la boucle, et les PR SUIVANTES ne
+          # seraient ni etiquetees ni fusionnees ce jour-la. Un echec de
+          # signalement ne doit pas couter le travail qui, lui, aboutit.
+          #
+          # ⚠️ Ce job ne tourne qu'en `schedule` / `workflow_dispatch` : le rouge
+          # n'apparait JAMAIS sur une PR humaine. C'est ce qui le distingue du
+          # `exit 1` inconditionnel que le job `merge` s'interdit plus haut, et
+          # qui ferait rougir ~85 % de ses runs.
+          gelees=$((gelees_sans_jeton + gelees_refusees + gelees_deja_demandees + gelees_indeterminees))
+          if [ "$gelees" -gt 0 ]; then
+            echo "::error title=Rattrapage Dependabot impuissant::$gelees PR Dependabot en conflit n'ont PAS pu etre relancees sur $REPO."
+            echo
+            echo "  - $gelees_sans_jeton sans jeton configure sur ce depot ;"
+            echo "  - $gelees_refusees refusees par Dependabot (« only users with push access ») ;"
+            echo "  - $gelees_deja_demandees deja demandees pour ce head, restees en conflit ;"
+            echo "  - $gelees_indeterminees sans reponse de Dependabot sous 60 s."
+            echo
+            echo "Ces PR sont gelees DEFINITIVEMENT : une PR en conflit n'a pas de merge ref,"
+            echo "donc aucune CI, donc aucun declencheur ne peut plus la reprendre."
+            echo
+            echo "FERMETURE DU ROUGE — le geste qui marche : qu'un HUMAIN commente"
+            echo "  @dependabot recreate"
+            echo "sur chaque PR nommee ci-dessus. Mesure du 2026-09-30 : 12 PR sur 15 reparees ainsi."
+            echo "('@dependabot rebase' ne repare PAS un conflit de verrou — il repond « already"
+            echo " up-to-date with main » sur une branche qui ne l'est pas ; son controle porte sur les"
+            echo " versions de dependances, pas sur l'ascendance git. Seul 'recreate' regenere le verrou.)"
+            echo
+            echo "🚨 POURQUOI AUCUNE AUTOMATISATION NE PEUT LE FAIRE A SA PLACE."
+            echo "Dependabot valide l'IDENTITE DE L'AUTEUR du commentaire, pas les droits du jeton."
+            echo "'github-actions[bot]' est refuse, et une GitHub App l'est aussi : la demande de support"
+            echo "dependabot-core#9147 « Support Dependabot commands by GitHub apps » est OUVERTE depuis"
+            echo "le 2024-02-27 (verifie le 2026-09-30). Installer une application ne ferme donc PAS ce"
+            echo "rouge. Seul un PAT d'UTILISATEUR est accepte — ce qui suppose de remplacer l'etape"
+            echo "'create-github-app-token' ci-dessus, qui ne sait produire qu'un jeton d'application."
+            echo
+            echo "⚠️ NE PAS CONFONDRE DEUX MECANISMES DISTINCTS :"
+            echo "  (a) un evenement produit par GITHUB_TOKEN ne declenche pas de workflow — regle des"
+            echo "      Actions, DOCUMENTEE, et qu'un jeton d'application resout bien ;"
+            echo "  (b) Dependabot refuse les commentaires non humains — regle du SERVICE, ecrite NULLE"
+            echo "      PART dans sa documentation, et qu'un jeton d'application ne resout PAS."
+            echo "Passer a une application corrige (a), qui n'etait pas le probleme, et laisse (b) entier."
+            echo "🚫 NE JAMAIS fermer une PR Dependabot pour nettoyer : une fermeture PAR UN HUMAIN"
+            echo "   enregistre un ignore PERMANENT de cette version, que 'reopen' ne defait pas."
+            exit 1
+          fi
         env:
           REPO: ${{ github.repository }}
           LABEL: dependabot-auto-merge-ok

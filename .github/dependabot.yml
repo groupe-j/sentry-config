@@ -72,7 +72,7 @@ updates:
       # Familles : seules celles du gabarit qui matchent une dépendance de ce
       # dépôt (relevé du 2026-10-13 sur `package.json`, hors peerDependencies,
       # que Dependabot ne parse pas). En ajouter une, c'est lui donner son
-      #`update-types: ["major"]`.
+      # `update-types: ["major"]`.
       #
       # CE QUE CECI NE CORRIGE PAS : les majeures ne sont jamais auto-fusionnées,
       # et chaque fusion de `all-minor-patch` les remet en conflit. Leur sortie

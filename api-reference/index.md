@@ -202,7 +202,7 @@ Defined in: [before-send.ts:41](https://github.com/groupe-j/sentry-config/blob/m
 
 ### SentryLogLike
 
-Defined in: [before-send.ts:313](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L313)
+Defined in: [before-send.ts:350](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L350)
 
 @groupe-j/sentry-config — barrel export.
 
@@ -220,13 +220,13 @@ setSentryUser, isBot) for advanced use cases.
 
 > `optional` **attributes?**: `Record`\<`string`, `unknown`\>
 
-Defined in: [before-send.ts:315](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L315)
+Defined in: [before-send.ts:352](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L352)
 
 ##### message?
 
 > `optional` **message?**: `unknown`
 
-Defined in: [before-send.ts:314](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L314)
+Defined in: [before-send.ts:351](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L351)
 
 ***
 
@@ -683,7 +683,7 @@ a reader the difference with a key-name redaction (`[REDACTED]`) at a glance.
 
 > `const` **SCRUB\_FAILED\_TAG**: `"pii_scrub_failed"` = `"pii_scrub_failed"`
 
-Defined in: [before-send.ts:94](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L94)
+Defined in: [before-send.ts:129](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L129)
 
 Tag set on an event whose scrubbing threw — see failClosed.
 
@@ -862,7 +862,7 @@ Defined in: [user.ts:33](https://github.com/groupe-j/sentry-config/blob/main/src
 
 > **createSentryBeforeSend**\<`E`\>(`appName`): (`event`) => `E` \| `null`
 
-Defined in: [before-send.ts:269](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L269)
+Defined in: [before-send.ts:304](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L304)
 
 @groupe-j/sentry-config — barrel export.
 
@@ -896,7 +896,7 @@ setSentryUser, isBot) for advanced use cases.
 
 > **createSentryBeforeSendLog**\<`L`\>(): (`log`) => `L`
 
-Defined in: [before-send.ts:322](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L322)
+Defined in: [before-send.ts:359](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L359)
 
 `beforeSendLog`: `Sentry.logger.error(\`… ${err}\`)` puts the same ORM
 message in a log line, and its template parameters in `attributes`.
@@ -917,7 +917,7 @@ message in a log line, and its template parameters in `attributes`.
 
 > **createSentryBeforeSendTransaction**\<`E`\>(): (`event`) => `E`
 
-Defined in: [before-send.ts:308](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L308)
+Defined in: [before-send.ts:345](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L345)
 
 `beforeSendTransaction` counterpart: a transaction carries the same request
 (`url` with `?token=…`), contexts and breadcrumbs as an error, plus span
@@ -1251,10 +1251,11 @@ the key list.
 
 > **scrubSentryEvent**\<`E`\>(`event`): `E`
 
-Defined in: [before-send.ts:295](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L295)
+Defined in: [before-send.ts:332](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L332)
 
-The scrubbing of `beforeSend` without its app tag or extension filter — for
-an app that keeps its own `beforeSend` and composes this after it:
+The scrubbing of `beforeSend` without its app tag or its drop filters
+(browser extensions, non-browser runtimes) — for an app that keeps its own
+`beforeSend` and composes this after it:
 
   beforeSend: (event) => { const e = ownRedactor(event); return e && scrubSentryEvent(e); }
 

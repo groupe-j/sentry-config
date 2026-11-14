@@ -3,6 +3,29 @@
 All notable changes to `@groupe-j/sentry-config` are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`createSentryBeforeSend` jette les événements d'un runtime JS non-navigateur
+  déguisé en Chrome.** Un événement dont une frame (`filename` ou `abs_path`)
+  **commence** par `ext:<module>/` (spécificateur interne de deno_core :
+  `ext:core/01_core.js`) ou par `<obscura:` (amorce du scraper headless
+  « Obscura ») est abandonné, comme le sont déjà les frames
+  `…-extension://`. Aucun navigateur ne produit ces emplacements.
+
+  Forme observée dans tout le portefeuille sur 30 jours — CORALY-6/-2,
+  MEGAHOTE-T3-1H/-1G/-1A/-19, RIDESAMUI-T3-19/-1H, BUSINESSFAMILY-C : un client
+  « Chrome 145 / Windows / Europe/Berlin » qui plante dans son propre moteur sur
+  la page d'accueil (`reading 'toLowerCase'`, `reading 'toObject'`), 0
+  utilisateur touché. Son user agent est celui d'un Chrome ordinaire : ni
+  `isBot()` ni `denyUrls` (qui ne regarde que la frame du haut) ne le voient.
+
+  Le filtre ne lit **que les frames**, jamais le message : une erreur applicative
+  qui cite le texte est conservée, de même qu'une URL de première partie qui le
+  contient sans commencer par lui. Les frames `<script>` / `<anonymous>` d'un vrai
+  navigateur ne sont pas concernées.
+
 ## [1.4.0] - 2026-09-30
 
 ### Added

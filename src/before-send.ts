@@ -90,6 +90,41 @@ function hasBrowserExtensionException(event: SentryEventLike): boolean {
   });
 }
 
+/**
+ * Frame location of a non-browser JavaScript runtime posing as a browser.
+ *
+ * - `ext:…` — module specifier of a deno_core runtime (`ext:core/01_core.js`,
+ *   `ext:deno_web/02_timers.js`). No browser ever emits one: browser frames are
+ *   `http(s)://`, `blob:`, `…-extension://`, `<anonymous>` or an inline script.
+ * - `<obscura:…>` — bootstrap of the "Obscura" headless scraper (built on
+ *   deno_core), which sends a plain Chrome user agent so `isBot()` and the UA
+ *   based filters never see it.
+ *
+ * Anchored at the start of the string: a first-party URL that merely contains
+ * the text (`https://app/docs/ext:core/…`) is a real frame and is kept.
+ */
+const NON_BROWSER_RUNTIME_FRAME = /^(?:ext:[\w-]+\/|<obscura:)/i;
+
+/**
+ * True when a stack frame belongs to a scraper's own JS runtime. Observed
+ * portfolio-wide (CORALY-6/-2, MEGAHOTE-T3-1H/-1G/-1A/-19, RIDESAMUI-T3-19/-1H,
+ * BUSINESSFAMILY-C): a "Chrome 145 / Windows" client crashing inside its own
+ * engine on the home page (`reading 'toLowerCase'` / `reading 'toObject'`),
+ * 0 users impacted. Not a browser, not our bug, never actionable.
+ *
+ * Matched on frames only — never on the message — so an app error that quotes
+ * the text is kept.
+ */
+function hasNonBrowserRuntimeFrame(event: SentryEventLike): boolean {
+  const values = event.exception?.values;
+  if (!values) return false;
+  return values.some((v) =>
+    (v.stacktrace?.frames ?? []).some(
+      (f) => NON_BROWSER_RUNTIME_FRAME.test(f.filename ?? "") || NON_BROWSER_RUNTIME_FRAME.test(f.abs_path ?? ""),
+    ),
+  );
+}
+
 /** Tag set on an event whose scrubbing threw — see {@link failClosed}. */
 export const SCRUB_FAILED_TAG = "pii_scrub_failed";
 
@@ -275,6 +310,7 @@ export function createSentryBeforeSend<E extends SentryEventLike>(
       // the fail-closed path, not escape — the SDK drops an event whose
       // `beforeSend` throws.
       if (hasBrowserExtensionException(event)) return null;
+      if (hasNonBrowserRuntimeFrame(event)) return null;
       const next = scrubEvent(event);
       next.tags = { ...next.tags, app: appName };
       return next;
@@ -285,8 +321,9 @@ export function createSentryBeforeSend<E extends SentryEventLike>(
 }
 
 /**
- * The scrubbing of `beforeSend` without its app tag or extension filter — for
- * an app that keeps its own `beforeSend` and composes this after it:
+ * The scrubbing of `beforeSend` without its app tag or its drop filters
+ * (browser extensions, non-browser runtimes) — for an app that keeps its own
+ * `beforeSend` and composes this after it:
  *
  *   beforeSend: (event) => { const e = ownRedactor(event); return e && scrubSentryEvent(e); }
  *

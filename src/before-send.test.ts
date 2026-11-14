@@ -66,3 +66,68 @@ describe("createSentryBeforeSend — browser-extension exceptions (dropped)", ()
     expect(beforeSend(event)).not.toBeNull();
   });
 });
+
+describe("createSentryBeforeSend — non-browser JS runtimes posing as Chrome (dropped)", () => {
+  // Shape observed portfolio-wide (CORALY-6/-2, MEGAHOTE-T3-1H/-1G/-1A/-19,
+  // RIDESAMUI-T3-19/-1H, BUSINESSFAMILY-C) : a headless scraper built on
+  // deno_core ("Obscura") that sends a "Chrome 145 / Windows" user agent, runs
+  // the page in its own runtime and crashes inside it — `reading 'toLowerCase'`
+  // / `reading 'toObject'` on the home page, 0 users impacted. Its stack holds
+  // frames no real browser can produce: `ext:core/…` (deno_core internal module
+  // specifiers) and `<obscura:bootstrap>`.
+  const obscuraEvent = (frames: { filename: string }[]) => ({
+    exception: {
+      values: [
+        {
+          type: "TypeError",
+          value: "Cannot read properties of undefined (reading 'toLowerCase')",
+          stacktrace: { frames },
+        },
+      ],
+    },
+  });
+
+  it("drops an event with a deno_core `ext:core/` frame", () => {
+    const event = obscuraEvent([
+      { filename: "https://megahote.com/_next/static/chunks/main.js" },
+      { filename: "ext:core/01_core.js" },
+    ]);
+    expect(beforeSend(event)).toBeNull();
+  });
+
+  it("drops an event with an `<obscura:…>` bootstrap frame", () => {
+    const event = obscuraEvent([
+      { filename: "<obscura:bootstrap>" },
+      { filename: "<script>" },
+    ]);
+    expect(beforeSend(event)).toBeNull();
+  });
+
+  it("drops it when the marker is only in abs_path", () => {
+    const event = {
+      exception: {
+        values: [
+          { type: "TypeError", value: "x", stacktrace: { frames: [{ abs_path: "ext:deno_web/02_timers.js" }] } },
+        ],
+      },
+    };
+    expect(beforeSend(event)).toBeNull();
+  });
+
+  it("keeps an inline `<script>` / `<anonymous>` frame — real browsers emit those", () => {
+    const event = obscuraEvent([{ filename: "<script>" }, { filename: "<anonymous>" }]);
+    expect(beforeSend(event)).not.toBeNull();
+  });
+
+  it("keeps a first-party file whose PATH merely contains `ext:core`", () => {
+    // Anchored on the scheme: only a specifier that STARTS with `ext:` is a
+    // runtime-internal module — never a URL that happens to contain the text.
+    const event = obscuraEvent([{ filename: "https://app.example.com/docs/ext:core/01_core.js" }]);
+    expect(beforeSend(event)).not.toBeNull();
+  });
+
+  it("keeps an error whose message merely mentions obscura", () => {
+    const event = { exception: { values: [{ type: "Error", value: "<obscura:bootstrap> is not a valid tag" }] } };
+    expect(beforeSend(event)).not.toBeNull();
+  });
+});

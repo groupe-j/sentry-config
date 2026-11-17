@@ -412,6 +412,52 @@ export function createSentryBeforeBreadcrumb<B extends SentryBreadcrumbLike>(): 
   };
 }
 
+/** Loose Session Replay recording event (rrweb event or Sentry custom frame). */
+export interface ReplayRecordingEventLike {
+  type?: number;
+  timestamp?: number;
+  data?: unknown;
+}
+
+/** rrweb `EventType.Meta` (`data.href`: the page URL) and `EventType.Custom` (Sentry frames). */
+const RRWEB_META = 4;
+const RRWEB_CUSTOM = 5;
+
+/**
+ * Optional `beforeAddRecordingEvent` for `replayIntegration` — NOT wired by the
+ * init helpers. Session Replay recordings go through none of the event hooks:
+ * the page URL of a recording (`/recherche?lng=…&lat=…&label=…`) and the URL of
+ * every request it lists (`performanceSpan` frames: `resource.fetch`,
+ * `navigation.push`…) reach Sentry as recorded. This applies the URL scrubbing
+ * to them: `data.href` of the meta event; `description`, `message` and
+ * `data` of breadcrumb and span frames. DOM snapshots and mutations are left
+ * to `maskAllText` / `blockAllMedia`.
+ *
+ *   replayIntegration({ beforeAddRecordingEvent: createReplayBeforeAddRecordingEvent() })
+ *
+ * Fail-closed: an event whose scrubbing throws is dropped (`null`).
+ */
+export function createReplayBeforeAddRecordingEvent<E extends ReplayRecordingEventLike>(): (event: E) => E | null {
+  return (event: E): E | null => {
+    try {
+      const data = event.data as Record<string, unknown> | undefined;
+      if (!data || typeof data !== "object") return event;
+      if (event.type === RRWEB_META && typeof data.href === "string") {
+        return { ...event, data: { ...data, href: scrubUrl(data.href) } };
+      }
+      const payload = data.payload as Record<string, unknown> | undefined;
+      if (event.type !== RRWEB_CUSTOM || !payload || typeof payload !== "object") return event;
+      const next: Record<string, unknown> = { ...payload };
+      if (typeof payload.description === "string") next.description = scrubUrl(payload.description);
+      if (typeof payload.message === "string") next.message = scrubText(payload.message);
+      if (payload.data !== undefined) next.data = scrubDeep(scrubUrlFields(payload.data));
+      return { ...event, data: { ...data, payload: next } };
+    } catch {
+      return null;
+    }
+  };
+}
+
 // Loose Sentry log shape (`beforeSendLog`).
 export interface SentryLogLike {
   message?: unknown;

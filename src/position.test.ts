@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  createReplayBeforeAddRecordingEvent,
   createSentryBeforeBreadcrumb,
   createSentryBeforeSend,
   createSentryBeforeSendTransaction,
@@ -108,24 +109,57 @@ describe("position — server event of a tRPC GET (`request`)", () => {
   const input = JSON.stringify({ 0: { json: { lng: Number(LNG), lat: Number(LAT) } } });
   const query = `batch=1&input=${encodeURIComponent(input)}`;
 
-  it("masks `input` in `request.url` and in the separate `query_string`", () => {
+  /** The input as the scrubbing re-encodes it: position keys `[REDACTED]`, the rest kept. */
+  const scrubbedInput = encodeURIComponent(JSON.stringify({ 0: { json: { lng: REDACTED, lat: REDACTED } } }));
+
+  it("masks the position INSIDE `input` in `request.url` and in the separate `query_string`", () => {
     const event = beforeSend({
       transaction: "GET /api/trpc/[trpc]",
       request: { url: `https://jepeuxconstruire.fr/api/trpc/carte.parcelles?${query}`, query_string: query },
     });
-    expect(event?.request?.url).toBe(`https://jepeuxconstruire.fr/api/trpc/carte.parcelles?batch=1&input=${REDACTED_VALUE}`);
-    expect(event?.request?.query_string).toBe(`batch=1&input=${REDACTED_VALUE}`);
+    expect(event?.request?.url).toBe(`https://jepeuxconstruire.fr/api/trpc/carte.parcelles?batch=1&input=${scrubbedInput}`);
+    expect(event?.request?.query_string).toBe(`batch=1&input=${scrubbedInput}`);
     expectNoPosition(event);
   });
 
-  it("masks a parsed `query_string` object, and a JSON `input` even without the route", () => {
-    expect(scrubQueryString({ batch: "1", input })).toEqual({ batch: "1", input: REDACTED_VALUE });
-    expect(scrubQueryString([["batch", "1"], ["input", input]])).toEqual([["batch", "1"], ["input", REDACTED_VALUE]]);
+  it("keeps a tRPC input without position whole — the input is the diagnosis", () => {
+    const plain = encodeURIComponent(JSON.stringify({ 0: { json: { id: "abc", page: 2 } } }));
+    expect(scrubUrl(`/api/trpc/dossier.get?batch=1&input=${plain}`)).toBe(`/api/trpc/dossier.get?batch=1&input=${plain}`);
+    expect(scrubQueryString(`batch=1&input=${plain}`, { trpc: true })).toBe(`batch=1&input=${plain}`);
   });
 
-  it("masks any `input` on a tRPC route, JSON or not", () => {
+  it("masks position and address label inside a batched tRPC input, keeps the rest", () => {
+    const batch = JSON.stringify({
+      0: { json: { insee: "57463" } },
+      1: { json: { lng: Number(LNG), lat: Number(LAT), label: ADDRESS, zone: "UA" } },
+    });
+    const out = scrubUrl(`/api/trpc/commune.get,carte.parcelles?batch=1&input=${encodeURIComponent(batch)}`);
+    const kept: unknown = JSON.parse(decodeURIComponent(out.split("input=")[1] ?? ""));
+    expect(kept).toEqual({
+      0: { json: { insee: "57463" } },
+      1: { json: { lng: REDACTED, lat: REDACTED, label: REDACTED_VALUE, zone: "UA" } },
+    });
+  });
+
+  it("scrubs a double-encoded input and re-encodes it twice", () => {
+    const twice = encodeURIComponent(encodeURIComponent(input));
+    const out = scrubUrl(`/api/trpc/a?input=${twice}`);
+    expect(out).toBe(`/api/trpc/a?input=${encodeURIComponent(scrubbedInput)}`);
+  });
+
+  it("masks an unreadable input whole (fail-closed)", () => {
     expect(scrubUrl("/api/trpc/x.y?input=abc")).toBe(`/api/trpc/x.y?input=${REDACTED_VALUE}`);
     expect(scrubQueryString("input=abc", { trpc: true })).toBe(`input=${REDACTED_VALUE}`);
+    expect(scrubUrl(`/api/trpc/x.y?input=%7B%22lat%22%3A${LAT}`)).toBe(`/api/trpc/x.y?input=${REDACTED_VALUE}`);
+    expect(scrubUrl("/api/trpc/x.y?input=%E0%A4%A")).toBe(`/api/trpc/x.y?input=${REDACTED_VALUE}`);
+    const huge = encodeURIComponent(JSON.stringify({ ids: "x".repeat(70_000) }));
+    expect(scrubUrl(`/api/trpc/x.y?input=${huge}`)).toBe(`/api/trpc/x.y?input=${REDACTED_VALUE}`);
+  });
+
+  it("scrubs a parsed `query_string` object or pairs the same way, and a JSON `input` without the route", () => {
+    const masked = JSON.stringify({ 0: { json: { lng: REDACTED, lat: REDACTED } } });
+    expect(scrubQueryString({ batch: "1", input })).toEqual({ batch: "1", input: masked });
+    expect(scrubQueryString([["batch", "1"], ["input", input]])).toEqual([["batch", "1"], ["input", masked]]);
   });
 
   it("keeps a non-JSON `input` elsewhere", () => {
@@ -162,7 +196,7 @@ describe("position — browser breadcrumbs (fetch, navigation)", () => {
       ],
     });
     expect((event?.breadcrumbs?.[0]?.data as Record<string, unknown>).url).toBe(
-      `/api/trpc/dossier.dossier,carte.parcelles?batch=1&input=${REDACTED_VALUE}`,
+      `/api/trpc/dossier.dossier,carte.parcelles?batch=1&input=${encodeURIComponent(JSON.stringify({ 0: { json: { lng: REDACTED, lat: REDACTED } } }))}`,
     );
     expectNoPosition(event);
   });
@@ -380,7 +414,9 @@ describe("position — review cases (PR #91)", () => {
       breadcrumbs: [{ category: "fetch", data: { url: `https://api-adresse.data.gouv.fr/search/?q=${ADDRESS} 57000 Metz&limit=5` } }],
     })?.breadcrumbs?.[0]?.data as Record<string, unknown>;
     expect(data.url).toBe(`https://api-adresse.data.gouv.fr/search/?q=${REDACTED_VALUE}&limit=5`);
-    expect(scrubQueryString(`input={"0":{"json":{"label":"${ADDRESS}"}}}&batch=1`)).toBe(`input=${REDACTED_VALUE}&batch=1`);
+    expect(scrubQueryString(`input={"0":{"json":{"label":"${ADDRESS}","lat":${LAT}}}}&batch=1`)).toBe(
+      `input={"0":{"json":{"label":"${REDACTED_VALUE}","lat":"${REDACTED}"}}}&batch=1`,
+    );
   });
 
   it("masks a double-encoded address in a nested URL (`%2520` decodes to a space)", () => {
@@ -466,5 +502,86 @@ describe("position — review cases (PR #91)", () => {
     expect(args[1]).toBe(nested);
     // …and beforeSend still cleans the nested object once it is joined to an event.
     expectNoPosition(beforeSend({ breadcrumbs: [out] }));
+  });
+});
+
+describe("position — map `center`, `ll` / `point`", () => {
+  it("masks `center` as a URL parameter and as an object key", () => {
+    expect(scrubUrl(`/carte?center=${LNG},${LAT}&zoom=17`)).toBe(`/carte?center=${REDACTED_VALUE}&zoom=17`);
+    expect(beforeSend({ extra: { map: { center: [Number(LNG), Number(LAT)], zoom: 17 } } })?.extra?.map).toEqual({
+      center: REDACTED,
+      zoom: 17,
+    });
+  });
+
+  it("masks `ll` / `point` on a map or geocoder URL, keeps them elsewhere", () => {
+    expect(scrubUrl(`https://maps.googleapis.com/maps/api/staticmap?ll=${LAT},${LNG}&size=400x400`)).toBe(
+      `https://maps.googleapis.com/maps/api/staticmap?ll=${REDACTED_VALUE}&size=400x400`,
+    );
+    expect(scrubUrl(`https://data.geopf.fr/geocodage/reverse?point=${LNG},${LAT}`)).toBe(
+      `https://data.geopf.fr/geocodage/reverse?point=${REDACTED_VALUE}`,
+    );
+    expect(scrubUrl("/quiz?point=3&ll=fr")).toBe("/quiz?point=3&ll=fr");
+  });
+});
+
+describe("createReplayBeforeAddRecordingEvent", () => {
+  const hook = createReplayBeforeAddRecordingEvent();
+
+  it("scrubs the page URL of the meta event", () => {
+    const out = hook({ type: 4, timestamp: 1, data: { href: `https://jepeuxconstruire.fr/recherche?lng=${LNG}&lat=${LAT}`, width: 1, height: 1 } });
+    expect(out?.data).toEqual({
+      href: `https://jepeuxconstruire.fr/recherche?lng=${REDACTED_VALUE}&lat=${REDACTED_VALUE}`,
+      width: 1,
+      height: 1,
+    });
+  });
+
+  it("scrubs the URL of a request span and a navigation, keeps their timing", () => {
+    const input = encodeURIComponent(JSON.stringify({ 0: { json: { lng: Number(LNG), lat: Number(LAT) } } }));
+    const fetchSpan = hook({
+      type: 5,
+      timestamp: 2,
+      data: {
+        tag: "performanceSpan",
+        payload: {
+          op: "resource.fetch",
+          description: `https://jepeuxconstruire.fr/api/trpc/carte.parcelles?batch=1&input=${input}`,
+          startTimestamp: 1,
+          endTimestamp: 2,
+          data: { method: "GET", statusCode: 200 },
+        },
+      },
+    });
+    expectNoPosition(fetchSpan);
+    expect((fetchSpan?.data as { payload: { op: string; endTimestamp: number } }).payload).toMatchObject({
+      op: "resource.fetch",
+      endTimestamp: 2,
+    });
+    const nav = hook({
+      type: 5,
+      data: {
+        tag: "performanceSpan",
+        payload: { op: "navigation.push", description: `/recherche?lng=${LNG}&lat=${LAT}&label=${encodeURIComponent(ADDRESS)}` },
+      },
+    });
+    expectNoPosition(nav);
+  });
+
+  it("scrubs a breadcrumb frame and leaves DOM events alone", () => {
+    const crumb = hook({ type: 5, data: { tag: "breadcrumb", payload: { category: "navigation", data: { to: `/recherche?lat=${LAT}` } } } });
+    expectNoPosition(crumb);
+    const dom = { type: 3, data: { source: 0, adds: [] } };
+    expect(hook(dom)).toBe(dom);
+  });
+
+  it("drops an event it cannot scrub (fail-closed)", () => {
+    const evil = {
+      type: 4,
+      get data(): unknown {
+        throw new Error("boom");
+      },
+    };
+    expect(hook(evil)).toBeNull();
   });
 });

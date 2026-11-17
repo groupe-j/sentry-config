@@ -4,7 +4,7 @@
 
 ### InitSentryClientOptions
 
-Defined in: [client.ts:69](https://github.com/groupe-j/sentry-config/blob/main/src/client.ts#L69)
+Defined in: [client.ts:70](https://github.com/groupe-j/sentry-config/blob/main/src/client.ts#L70)
 
 #### Extends
 
@@ -68,7 +68,7 @@ Extra error patterns to ignore (merged with DEFAULT_IGNORED_ERRORS).
 
 > `optional` **replay?**: [`ReplayMode`](#replaymode)
 
-Defined in: [client.ts:85](https://github.com/groupe-j/sentry-config/blob/main/src/client.ts#L85)
+Defined in: [client.ts:86](https://github.com/groupe-j/sentry-config/blob/main/src/client.ts#L86)
 
 Replay strategy for this entry point: `true` (default — set up during
 `Sentry.init`, records from the very first line) or `false` (off).
@@ -314,7 +314,7 @@ the right call and the wasted bytes are the price.
 
 > **initSentryClient**(`opts`): `void`
 
-Defined in: [client.ts:88](https://github.com/groupe-j/sentry-config/blob/main/src/client.ts#L88)
+Defined in: [client.ts:89](https://github.com/groupe-j/sentry-config/blob/main/src/client.ts#L89)
 
 #### Parameters
 
@@ -327,6 +327,12 @@ Defined in: [client.ts:88](https://github.com/groupe-j/sentry-config/blob/main/s
 `void`
 
 ## References
+
+### createReplayBeforeAddRecordingEvent
+
+Re-exports [createReplayBeforeAddRecordingEvent](index.md#createreplaybeforeaddrecordingevent)
+
+***
 
 ### createSentryBeforeBreadcrumb
 

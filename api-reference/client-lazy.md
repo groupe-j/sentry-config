@@ -4,7 +4,7 @@
 
 ### InitSentryClientLazyOptions
 
-Defined in: [client-lazy.ts:85](https://github.com/groupe-j/sentry-config/blob/main/src/client-lazy.ts#L85)
+Defined in: [client-lazy.ts:87](https://github.com/groupe-j/sentry-config/blob/main/src/client-lazy.ts#L87)
 
 #### Extends
 
@@ -68,7 +68,7 @@ Extra error patterns to ignore (merged with DEFAULT_IGNORED_ERRORS).
 
 > `optional` **replay?**: [`LazyReplayMode`](#lazyreplaymode)
 
-Defined in: [client-lazy.ts:94](https://github.com/groupe-j/sentry-config/blob/main/src/client-lazy.ts#L94)
+Defined in: [client-lazy.ts:96](https://github.com/groupe-j/sentry-config/blob/main/src/client-lazy.ts#L96)
 
 `"lazy"` (default) — Replay fetched from the CDN after first paint or on
 the first captured error. `false` — no Replay at all, and unlike on the
@@ -293,7 +293,7 @@ Replay.
 
 > **initSentryClient**(`opts`): `void`
 
-Defined in: [client-lazy.ts:97](https://github.com/groupe-j/sentry-config/blob/main/src/client-lazy.ts#L97)
+Defined in: [client-lazy.ts:99](https://github.com/groupe-j/sentry-config/blob/main/src/client-lazy.ts#L99)
 
 #### Parameters
 
@@ -306,6 +306,18 @@ Defined in: [client-lazy.ts:97](https://github.com/groupe-j/sentry-config/blob/m
 `void`
 
 ## References
+
+### createReplayBeforeAddRecordingEvent
+
+Re-exports [createReplayBeforeAddRecordingEvent](index.md#createreplaybeforeaddrecordingevent)
+
+***
+
+### createSentryBeforeBreadcrumb
+
+Re-exports [createSentryBeforeBreadcrumb](index.md#createsentrybeforebreadcrumb)
+
+***
 
 ### SCRUB\_FAILED\_TAG
 

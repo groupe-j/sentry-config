@@ -61,6 +61,7 @@ export { SENTRY_BROWSER_TRACES_SAMPLE_RATE } from "./sampling.js";
  */
 export {
   SCRUB_FAILED_TAG,
+  createReplayBeforeAddRecordingEvent,
   createSentryBeforeBreadcrumb,
   scrubSentryEvent,
   type SentryEventLike,

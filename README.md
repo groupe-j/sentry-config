@@ -625,20 +625,27 @@ helpers therefore also install value-level scrubbing (`src/scrub.ts`):
 **Positions and addresses in URLs.** A visitor's coordinates are the address
 of a private person, and they travel as numbers no text pattern sees. The hooks
 mask the **value** of `geom`, `lat`, `lng`, `lon`, `latlon`, `latitude`,
-`longitude`, `coordinates`, `coords`, `adresse`, `address` — and of the map
+`longitude`, `coordinates`, `coords`, `center`, `adresse`, `address` — and of the map
 viewport around the plot: `bbox`, `minLat`…`maxLng`, WMTS `TILEROW` / `TILECOL` — wherever they
 appear (URLs, free text, and as object keys — a `{ lat: 49.11 }` in `extra` or
-in the tRPC input of `contexts.trpc`); `q` / `query` / `text` / `label` on a
-geocoder (`api-adresse.data.gouv.fr`, `data.geopf.fr/geocodage`, Nominatim,
-Photon) or next to a position in the same query; and `input` on a `/trpc/` URL
-(or whenever it holds JSON). The parameter name and the rest of the URL stay. A
+in the tRPC input of `contexts.trpc`); `q` / `query` / `text` / `label` / `ll` /
+`point` on a geocoder or map API (`api-adresse.data.gouv.fr`, `data.geopf.fr`,
+OpenStreetMap/Nominatim, Photon, Google Maps, Mapbox…) or next to a position in
+the same query; and, inside a tRPC `input` (on a `/trpc/` URL, or whenever it
+holds JSON), the same keys: the input is decoded, scrubbed and re-encoded, so
+the rest of the procedure input stays readable (masked whole if unreadable). The parameter name and the rest of the URL stay. A
 URL whose parameter names cannot be decoded loses its whole query (fail-closed).
 In a URL a value runs to the next `&` (an unencoded `?q=12 rue de Metz&…` is
 masked whole); `label` / `q` / `text` next to `lat` / `lng` in an object or a
 JSON dump are masked too; slippy-map tiles (`/19/{x}/{y}.png`) and the map hash
 (`#17/49.11/6.17`) keep only their zoom. Not covered: an address in a URL
-**path** (a geocoder that takes it there), and Replay recordings, which go
-through none of these hooks.
+**path** (a geocoder that takes it there).
+
+**Session Replay is not covered by default** — recordings (page URL, resource
+URLs) go through none of these hooks. Cover it in the app: keep `maskAllText`,
+leave routes that carry a position out of `networkDetailAllowUrls`, and pass
+the optional `createReplayBeforeAddRecordingEvent()` (exported by `/client` and
+`/client-lazy`) as `replayIntegration({ beforeAddRecordingEvent })`.
 `beforeBreadcrumb` (`createSentryBeforeBreadcrumb`) applies the same scrubbing
 when a breadcrumb is recorded.
 

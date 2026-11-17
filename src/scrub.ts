@@ -253,20 +253,27 @@ const POSITION_PARAMS = new Set([
   "maxlon",
   "tilerow",
   "tilecol",
+  // MapLibre / Mapbox `center=lng,lat` and `{ center: [lng, lat] }`.
+  "center",
   "adresse",
   "address",
 ]);
 
 /**
- * Free text that names the place: the label of a geocoded address
- * (`label=12 rue de Metz 57000 Metz`), the query typed into a geocoder. Too
- * generic to mask everywhere (`?q=permis` on a blog search is a diagnostic), so
- * only on an address API, or next to a position in the same query.
+ * Text or values that name the place: the label of a geocoded address
+ * (`label=12 rue de Metz 57000 Metz`), the query typed into a geocoder, a
+ * `ll=` / `point=` of a map API. Too generic to mask everywhere (`?q=permis` on
+ * a blog search is a diagnostic), so only on a geocoder or map API, or next to
+ * a position in the same query or object.
  */
-const ADDRESS_TEXT_PARAMS = new Set(["q", "query", "text", "label"]);
+const ADDRESS_TEXT_PARAMS = new Set(["q", "query", "text", "label", "ll", "point"]);
 
-/** Geocoders: every free-text parameter sent to them is an address typed by a visitor. */
-const ADDRESS_API = /api-adresse\.data\.gouv\.fr|data\.geopf\.fr\/geocodage|nominatim\.openstreetmap\.org|photon\.komoot\.io/i;
+/**
+ * Geocoders and map APIs: every free-text parameter sent to them is an address
+ * typed by a visitor, or a place.
+ */
+const ADDRESS_API =
+  /api-adresse\.data\.gouv\.fr|data\.geopf\.fr|wxs\.ign\.fr|openstreetmap\.org|photon\.komoot\.io|maps\.googleapis\.com|google\.[a-z.]{2,8}\/maps|api\.mapbox\.com|api\.maptiler\.com/i;
 
 /** A tRPC HTTP route (`/api/trpc/router.proc?batch=1&input=…`). */
 const TRPC_PATH = /\/trpc\//i;
@@ -340,9 +347,57 @@ function isEmptyOrMasked(value: string): boolean {
 function masksPositionParam(leaf: string, value: string, ctx: UrlScrubContext, hasPosition: boolean): boolean {
   if (isEmptyOrMasked(value)) return false;
   if (POSITION_PARAMS.has(leaf)) return true;
-  if (leaf === "input") return ctx.trpc === true || JSON_VALUE.test(value);
   if (ADDRESS_TEXT_PARAMS.has(leaf)) return ctx.addressApi === true || hasPosition;
   return false;
+}
+
+/**
+ * Is this `input` a procedure input, to be scrubbed as JSON by
+ * {@link scrubJsonParam}? On a tRPC route always (a non-JSON one is then
+ * unreadable and masked whole), elsewhere when it holds JSON.
+ */
+function isJsonInput(leaf: string, value: string, ctx: UrlScrubContext): boolean {
+  return leaf === "input" && !isEmptyOrMasked(value) && (ctx.trpc === true || JSON_VALUE.test(value));
+}
+
+/** Above this many decoded characters, an input is masked whole rather than parsed. */
+const MAX_JSON_PARAM = 65_536;
+
+/**
+ * A tRPC `input` (`{"0":{"json":{"lng":…,"lat":…,"label":"12 rue…"}}}`,
+ * URL-encoded once or twice, or raw): decoded, parsed, walked by
+ * {@link scrubDeep} — position keys, an address next to them, credentials and
+ * e-mails go, the rest of the input stays for diagnosis — then re-encoded as
+ * many times as it was. Fail-closed: undecodable, not JSON, or too large → the
+ * whole value is masked.
+ */
+function startsJson(text: string): boolean {
+  return text.startsWith("{") || text.startsWith("[");
+}
+
+function scrubJsonParam(raw: string): string {
+  let decoded = raw;
+  let layers = 0;
+  while (!startsJson(decoded) && decoded.includes("%") && layers < MAX_DECODE_DEPTH) {
+    try {
+      decoded = decodeURIComponent(decoded.replace(/\+/g, " "));
+    } catch {
+      return REDACTED_VALUE;
+    }
+    layers++;
+  }
+  if (decoded.length > MAX_JSON_PARAM || !startsJson(decoded)) return REDACTED_VALUE;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(decoded);
+  } catch {
+    return REDACTED_VALUE;
+  }
+  let out = JSON.stringify(scrubDeep(parsed));
+  // Markers stay encoded inside an encoded value: a literal `]` would end the
+  // value early on the next pass over free text (`input=%7B…[REDACTED` → not JSON).
+  for (let i = 0; i < layers; i++) out = encodeURIComponent(out);
+  return out;
 }
 
 /** URL-decode a parameter NAME (`+` is a space in a query). Throws on malformed percent-encoding. */
@@ -421,7 +476,7 @@ const VALUE_HEAD = 16;
 function maskParams(
   text: string,
   urlMode: boolean,
-  decide: (leaf: string, value: string) => boolean,
+  decide: (leaf: string, value: string) => boolean | "json",
 ): { out: string; sawPosition: boolean } {
   let out = "";
   let last = 0;
@@ -446,7 +501,7 @@ function maskParams(
     if (mask) {
       const mode: ValueMode = urlMode ? "url" : leaf === undefined || isAddressLeaf(leaf) ? "address" : "text";
       const end = positionValueEnd(text, valueStart, mode);
-      out += text.slice(last, valueStart) + REDACTED_VALUE;
+      out += text.slice(last, valueStart) + (mask === "json" ? scrubJsonParam(text.slice(valueStart, end)) : REDACTED_VALUE);
       last = end;
       PARAM_NAME.lastIndex = end;
     }
@@ -465,7 +520,8 @@ function scrubPositionText(text: string, given: ScanContext | undefined): string
   const first = maskParams(
     text,
     urlMode,
-    (leaf, value) => !ADDRESS_TEXT_PARAMS.has(leaf) && masksPositionParam(leaf, value, ctx, false),
+    (leaf, value) =>
+      isJsonInput(leaf, value, ctx) ? "json" : !ADDRESS_TEXT_PARAMS.has(leaf) && masksPositionParam(leaf, value, ctx, false),
   );
   if (!first.sawPosition && ctx.addressApi !== true) return first.out;
   return maskParams(
@@ -923,14 +979,20 @@ function queryKeyLeaf(key: string): string | undefined {
   }
 }
 
-function scrubQueryValue(key: string, v: unknown, mask: (leaf: string, value: string) => boolean): unknown {
+function scrubQueryValue(
+  key: string,
+  v: unknown,
+  mask: (leaf: string, value: string) => boolean,
+  ctx: UrlScrubContext,
+): unknown {
   const leaf = queryKeyLeaf(key);
   if (typeof v === "string") {
     if (leaf === undefined) return isEmptyOrMasked(v) ? v : REDACTED_VALUE;
+    if (isJsonInput(leaf, v, ctx)) return scrubJsonParam(v);
     return isSecretParam(key, v) || mask(leaf, v) ? REDACTED_VALUE : scrubText(v);
   }
   // `?token=a&token=b` parses to `{ token: ["a", "b"] }`.
-  if (Array.isArray(v)) return v.map((item) => scrubQueryValue(key, item, mask));
+  if (Array.isArray(v)) return v.map((item) => scrubQueryValue(key, item, mask, ctx));
   if (v !== null && typeof v === "object" && (leaf === undefined || POSITION_PARAMS.has(leaf))) return REDACTED;
   return scrubDeep(v);
 }
@@ -954,7 +1016,7 @@ export function scrubQueryString(qs: unknown, ctx?: UrlScrubContext): unknown {
     return qs.map((pair) => {
       if (!Array.isArray(pair) || typeof pair[0] !== "string") return scrubDeep(pair);
       const [k, v] = pair as [string, unknown];
-      return [k, scrubQueryValue(k, v, mask)];
+      return [k, scrubQueryValue(k, v, mask, context)];
     });
   }
   if (qs !== null && typeof qs === "object") {
@@ -963,7 +1025,7 @@ export function scrubQueryString(qs: unknown, ctx?: UrlScrubContext): unknown {
     const mask = (leaf: string, value: string): boolean => masksPositionParam(leaf, value, context, hasPosition);
     const result: Record<string, unknown> = {};
     for (const [k, v] of entries) {
-      result[k] = scrubQueryValue(k, v, mask);
+      result[k] = scrubQueryValue(k, v, mask, context);
     }
     return result;
   }

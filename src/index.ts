@@ -12,11 +12,13 @@
 
 export {
   SCRUB_FAILED_TAG,
+  createReplayBeforeAddRecordingEvent,
   createSentryBeforeBreadcrumb,
   createSentryBeforeSend,
   createSentryBeforeSendLog,
   createSentryBeforeSendTransaction,
   scrubSentryEvent,
+  type ReplayRecordingEventLike,
   type SentryBreadcrumbLike,
   type SentryEventLike,
   type SentryLogLike,

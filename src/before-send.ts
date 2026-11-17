@@ -17,6 +17,7 @@ import {
   scrubRequestData,
   scrubText,
   scrubUrl,
+  scrubRecordedBreadcrumbData,
   scrubUrlFields,
   urlContextOf,
 } from "./scrub.js";
@@ -175,6 +176,13 @@ function scrubTags(tags: Record<string, unknown>): Record<string, unknown> {
   return result;
 }
 
+/** The root span's data (`contexts.trace.data`) holds the same URL fields as a span's. */
+function withTraceUrlFields(contexts: Record<string, unknown>): Record<string, unknown> {
+  const trace = contexts.trace as { data?: unknown } | undefined;
+  if (!trace || typeof trace !== "object" || trace.data === undefined) return contexts;
+  return { ...contexts, trace: { ...trace, data: scrubUrlFields(trace.data) } };
+}
+
 /**
  * A breadcrumb: its message, and its data with the URL fields read as URLs
  * (`http.query` with the host of `url`, see `scrubUrlFields`).
@@ -252,7 +260,7 @@ function scrubEvent<E extends SentryEventLike>(event: E): E {
   if (event.breadcrumbs) next.breadcrumbs = event.breadcrumbs.map((b) => scrubBreadcrumb(b, seen));
 
   if (event.extra) next.extra = scrubDeep(event.extra, seen) as Record<string, unknown>;
-  if (event.contexts) next.contexts = scrubContexts(event.contexts, seen) as Record<string, unknown>;
+  if (event.contexts) next.contexts = scrubContexts(withTraceUrlFields(event.contexts), seen) as Record<string, unknown>;
 
   if (event.spans) {
     next.spans = event.spans.map((s) => ({
@@ -369,8 +377,9 @@ export function createSentryBeforeSendTransaction<E extends SentryEventLike>(): 
 }
 
 /**
- * `beforeBreadcrumb`: the same scrubbing as the breadcrumbs of `beforeSend`,
- * applied when the breadcrumb is RECORDED. `beforeSend` already cleans the
+ * `beforeBreadcrumb`: the URL, message and top-level scrubbing of the
+ * breadcrumbs of `beforeSend`, applied when the breadcrumb is RECORDED (nested
+ * objects are left to `beforeSend`, see `scrubRecordedBreadcrumbData`). `beforeSend` already cleans the
  * breadcrumbs joined to an event; this hook keeps the raw ones (an outgoing
  * call's `http.query`, a fetch `url`, a navigation `to`) out of the scope
  * buffer, where anything else that reads it — an integration, an app's own
@@ -382,7 +391,11 @@ export function createSentryBeforeSendTransaction<E extends SentryEventLike>(): 
 export function createSentryBeforeBreadcrumb<B extends SentryBreadcrumbLike>(): (breadcrumb: B) => B {
   return (breadcrumb: B): B => {
     try {
-      return scrubBreadcrumb(breadcrumb, new WeakSet<object>());
+      return {
+        ...breadcrumb,
+        message: typeof breadcrumb.message === "string" ? scrubText(breadcrumb.message) : breadcrumb.message,
+        data: breadcrumb.data === undefined ? undefined : scrubRecordedBreadcrumbData(breadcrumb.data),
+      };
     } catch {
       const kept: SentryBreadcrumbLike = { message: REDACTED_VALUE };
       for (const key of ["type", "category", "level", "timestamp"] as const) {

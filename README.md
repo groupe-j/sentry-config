@@ -633,8 +633,12 @@ geocoder (`api-adresse.data.gouv.fr`, `data.geopf.fr/geocodage`, Nominatim,
 Photon) or next to a position in the same query; and `input` on a `/trpc/` URL
 (or whenever it holds JSON). The parameter name and the rest of the URL stay. A
 URL whose parameter names cannot be decoded loses its whole query (fail-closed).
-Not covered: a position in a URL **path** (`/{z}/{x}/{y}.png` tiles, a geocoder
-that takes the address in its path).
+In a URL a value runs to the next `&` (an unencoded `?q=12 rue de Metz&…` is
+masked whole); `label` / `q` / `text` next to `lat` / `lng` in an object or a
+JSON dump are masked too; slippy-map tiles (`/19/{x}/{y}.png`) and the map hash
+(`#17/49.11/6.17`) keep only their zoom. Not covered: an address in a URL
+**path** (a geocoder that takes it there), and Replay recordings, which go
+through none of these hooks.
 `beforeBreadcrumb` (`createSentryBeforeBreadcrumb`) applies the same scrubbing
 when a breadcrumb is recorded.
 

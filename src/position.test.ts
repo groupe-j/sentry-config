@@ -373,3 +373,98 @@ describe("position — cost", () => {
     }
   });
 });
+
+describe("position — review cases (PR #91)", () => {
+  it("masks an unencoded address up to the next parameter, not the first space", () => {
+    const data = beforeSend({
+      breadcrumbs: [{ category: "fetch", data: { url: `https://api-adresse.data.gouv.fr/search/?q=${ADDRESS} 57000 Metz&limit=5` } }],
+    })?.breadcrumbs?.[0]?.data as Record<string, unknown>;
+    expect(data.url).toBe(`https://api-adresse.data.gouv.fr/search/?q=${REDACTED_VALUE}&limit=5`);
+    expect(scrubQueryString(`input={"0":{"json":{"label":"${ADDRESS}"}}}&batch=1`)).toBe(`input=${REDACTED_VALUE}&batch=1`);
+  });
+
+  it("masks a double-encoded address in a nested URL (`%2520` decodes to a space)", () => {
+    const out = scrubUrl(`https://x.fr/login?next=%2Frecherche%3Flng%3D${LNG}%26label%3D12%2520rue%2520de%2520Metz`);
+    expectNoPosition(out);
+    expect(out).not.toContain("Metz");
+  });
+
+  it("masks free-text address values past their spaces, up to a line or quote", () => {
+    expect(scrubText(`geocode failed: adresse=${ADDRESS} 57000 Metz\nnext line`)).toBe(
+      `geocode failed: adresse=${REDACTED_VALUE}\nnext line`,
+    );
+  });
+
+  it("keeps `server.address` and other dotted OTel attributes", () => {
+    const tx = createSentryBeforeSendTransaction<SentryEventLike>()({
+      spans: [{ data: { "server.address": "apicarto.ign.fr", "network.peer.address": "10.0.0.1", "url.full": "https://apicarto.ign.fr/x" } }],
+    });
+    expect((tx.spans?.[0]?.data as Record<string, unknown>)["server.address"]).toBe("apicarto.ign.fr");
+    expect(scrubText('{"server.address":"apicarto.ign.fr"}')).toBe('{"server.address":"apicarto.ign.fr"}');
+    expect(scrubText("server.address=apicarto.ign.fr status=504")).toBe("server.address=apicarto.ign.fr status=504");
+  });
+
+  it("masks the label of a geocoder suggestion next to its position (object and JSON text)", () => {
+    const event = beforeSend({ extra: { suggestion: { label: `${ADDRESS} 57000 Metz`, lat: Number(LAT), lng: Number(LNG), insee: "57463" } } });
+    expect(event?.extra?.suggestion).toEqual({ label: REDACTED_VALUE, lat: REDACTED, lng: REDACTED, insee: "57463" });
+    expect(scrubText(`{"label":"${ADDRESS}","lat":${LAT},"lng":${LNG}}`)).toBe(
+      `{"label":"${REDACTED_VALUE}","lat":${REDACTED_VALUE},"lng":${REDACTED_VALUE}}`,
+    );
+    // Without a position, a label is a UI label.
+    expect(beforeSend({ extra: { button: { label: "Rechercher" } } })?.extra?.button).toEqual({ label: "Rechercher" });
+  });
+
+  it("masks a large polygon to its end (no 8 KB tail in clear)", () => {
+    const ring = Array.from({ length: 600 }, (_, i) => [6.1 + i / 1e6, 49.1 + i / 1e6]);
+    const geom = JSON.stringify({ type: "Polygon", coordinates: [ring] });
+    expect(scrubUrl(`/api/cadastre?geom=${geom}&x=1`)).toBe(`/api/cadastre?geom=${REDACTED_VALUE}&x=1`);
+    expect(scrubUrl(`/api/cadastre?geom=${encodeURIComponent(geom)}`)).toBe(`/api/cadastre?geom=${REDACTED_VALUE}`);
+    expect(scrubText(`"coordinates":${JSON.stringify([ring])}`)).toBe(`"coordinates":${REDACTED_VALUE}`);
+  });
+
+  it("stops a raw JSON value at its closing bracket inside a JSON string", () => {
+    expect(scrubText('{"url":"/api/gpu?geom={%22type%22:%22Point%22}","status":500}')).toBe(
+      `{"url":"/api/gpu?geom=${REDACTED_VALUE}","status":500}`,
+    );
+  });
+
+  it("finds a position parameter right after a quote or a parenthesis", () => {
+    expect(scrubText(`{"qs":"lat=${LAT}&lng=${LNG}"}`)).toBe(`{"qs":"lat=${REDACTED_VALUE}&lng=${REDACTED_VALUE}"}`);
+    expect(scrubText(`(lat=${LAT})`)).toBe(`(lat=${REDACTED_VALUE})`);
+  });
+
+  it("masks slippy-map tiles and the map hash, keeps the zoom", () => {
+    expect(scrubUrl("https://tile.openstreetmap.org/19/265432/180123.png")).toBe(
+      `https://tile.openstreetmap.org/19/${REDACTED_VALUE}/${REDACTED_VALUE}.png`,
+    );
+    expect(scrubUrl(`/recherche#17.5/${LAT}/${LNG}`)).toBe(`/recherche#17.5/${REDACTED_VALUE}`);
+    expect(scrubText(`center: [${LNG}, ${LAT}]`)).toBe(`center: ${REDACTED_VALUE}`);
+  });
+
+  it("fails closed on an undecodable key of a parsed query_string", () => {
+    expect(scrubQueryString({ "%E0": LAT, page: "2" })).toEqual({ "%E0": REDACTED_VALUE, page: "2" });
+    expect(scrubQueryString([["l%61t", LAT]])).toEqual([["l%61t", REDACTED_VALUE]]);
+  });
+
+  it("reads the root span's URL fields (`contexts.trace.data`) with their host", () => {
+    const tx = createSentryBeforeSendTransaction<SentryEventLike>()({
+      contexts: { trace: { trace_id: "t", data: { "url.full": "https://data.geopf.fr/geocodage/search", "url.query": `?q=${ADDRESS}` } } },
+    });
+    expect(((tx.contexts?.trace as Record<string, unknown>).data as Record<string, unknown>)["url.query"]).toBe(`?q=${REDACTED_VALUE}`);
+  });
+
+  it("beforeBreadcrumb scrubs top-level strings and console arguments, leaves nested objects to beforeSend", () => {
+    const nested = { features: [{ geometry: { coordinates: [Number(LNG), Number(LAT)] } }] };
+    const out = createSentryBeforeBreadcrumb()({
+      category: "console",
+      message: `parcels for /recherche?lat=${LAT}`,
+      data: { arguments: [`/recherche?lat=${LAT}`, nested], logger: "console" },
+    });
+    expect(out.message).toBe(`parcels for /recherche?lat=${REDACTED_VALUE}`);
+    const args = (out.data as { arguments: unknown[] }).arguments;
+    expect(args[0]).toBe(`/recherche?lat=${REDACTED_VALUE}`);
+    expect(args[1]).toBe(nested);
+    // …and beforeSend still cleans the nested object once it is joined to an event.
+    expectNoPosition(beforeSend({ breadcrumbs: [out] }));
+  });
+});

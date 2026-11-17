@@ -303,9 +303,13 @@ export function urlContextOf(...sources: unknown[]): UrlScrubContext {
   return urlContext(undefined, ...sources);
 }
 
-/** Last segment of a parameter name, folded: `point[lat]`, `filter.lat` and `LAT` are all `lat`. */
+/**
+ * Last bracket segment of a name, folded: `point[lat]` and `LAT` are `lat`.
+ * Dots are NOT split: `server.address` (an OTel attribute on every fetch span:
+ * the upstream host) is not an `address`.
+ */
 function paramLeaf(name: string): string {
-  const parts = name.split(/[.[\]]/);
+  const parts = name.split(/[[\]]/);
   for (let i = parts.length - 1; i >= 0; i--) {
     const part = parts[i];
     if (part) return foldKey(part);
@@ -352,28 +356,59 @@ function decodeParamName(raw: string): string {
  * right after `=` when the value is kept — a position parameter glued to it
  * (`a=1,lat=48.8`) is still found.
  */
-const PARAM_NAME = /(^|[?&#;,\s])([^\s=&?#;,"'`<>]{1,64})=/g;
+const PARAM_NAME = /(^|[?&#;,\s"'(])([^\s=&?#;,"'`<>()]{1,64})=/g;
 
 /**
- * Where a position value ends. Wider than {@link PARAM_KV}, which stops at `,`
- * and `"`: `geom={%22type%22:%22Point%22,%22coordinates%22:[2.35,48.85]}` (a
- * URL normalised by WHATWG leaves `{`, `,` and `[` raw) and `adresse=12%20rue,
- * %20Metz` would otherwise leave the tail in clear. A raw JSON value runs to
- * the next parameter; anything else also stops at a quote or a backslash, the
- * end of an enclosing string.
+ * How far a value runs:
+ *  - `head`: enough to decide (empty, already masked, JSON start), bounded;
+ *  - `url`: the text IS a URL or a query (`scrubUrl`, a decoded nested URL) —
+ *    only `&` and `#` end a value: `?q=12 rue de Metz&limit=5` is a URL that
+ *    `fetch` accepts unencoded, and stopping at the space left the street in
+ *    clear while the value LOOKED masked;
+ *  - `address`: an address in free text — a space does not end it, a line,
+ *    a quote or a parameter does;
+ *  - `text`: anything else in free text — also ends at a space.
  */
-function positionValueEnd(text: string, start: number, limit = 8192): number {
-  const json = text[start] === "{" || text[start] === "[";
-  const max = Math.min(text.length, start + limit);
-  let i = start;
-  for (; i < max; i++) {
-    const c = text.charCodeAt(i);
-    // & # whitespace
-    if (c === 38 || c === 35 || c === 32 || (c >= 9 && c <= 13)) break;
-    // " ' ` < > \
-    if (!json && (c === 34 || c === 39 || c === 96 || c === 60 || c === 62 || c === 92)) break;
+type ValueMode = "head" | "url" | "address" | "text";
+
+/**
+ * Where a value starting at `start` ends. Wider than {@link PARAM_KV}, which
+ * stops at `,`: `geom={%22type%22:%22Point%22,%22coordinates%22:[2.35,48.85]}`
+ * (WHATWG leaves `{`, `,` and `[` raw) and `adresse=12%20rue,%20Metz` would
+ * leave their tail in clear. A raw JSON value runs to its closing bracket —
+ * spaces and quotes included — or to the next parameter or line. Unbounded when
+ * masking: a masked value is never scanned again, so this stays linear, and a
+ * bound would leave the tail of a large polygon in clear.
+ */
+function positionValueEnd(text: string, start: number, mode: ValueMode): number {
+  const first = text[start];
+  if (mode !== "head" && (first === "{" || first === "[")) {
+    let depth = 0;
+    for (let i = start; i < text.length; i++) {
+      const c = text.charCodeAt(i);
+      if (c === 38 || c === 35 || c === 10 || c === 13) return i; // & # \n \r
+      if (c === 123 || c === 91) depth++;
+      else if ((c === 125 || c === 93) && --depth === 0) return i + 1;
+    }
+    return text.length;
   }
-  return i;
+  const max = mode === "head" ? Math.min(text.length, start + VALUE_HEAD) : text.length;
+  for (let i = start; i < max; i++) {
+    const c = text.charCodeAt(i);
+    if (c === 38 || c === 35) return i; // & #
+    if (mode === "url") continue;
+    if (c === 10 || c === 13) return i;
+    // whitespace, and the closing ) ] } of an enclosing expression
+    if (mode !== "address" && (c === 32 || c === 9 || c === 11 || c === 12 || c === 41 || c === 93 || c === 125)) return i;
+    // " ' ` < > \ — the end of an enclosing string
+    if (c === 34 || c === 39 || c === 96 || c === 60 || c === 62 || c === 92) return i;
+  }
+  return max;
+}
+
+/** Names whose value is an address, i.e. text with spaces. */
+function isAddressLeaf(leaf: string): boolean {
+  return ADDRESS_TEXT_PARAMS.has(leaf) || leaf === "adresse" || leaf === "address";
 }
 
 /** Enough of a value to tell empty, `[redacted]` and a JSON start (`%25257B`) apart. */
@@ -385,6 +420,7 @@ const VALUE_HEAD = 16;
  */
 function maskParams(
   text: string,
+  urlMode: boolean,
   decide: (leaf: string, value: string) => boolean,
 ): { out: string; sawPosition: boolean } {
   let out = "";
@@ -397,7 +433,7 @@ function maskParams(
     // Decide on the head of the value only, and scan to its end only to mask:
     // a kept value is scanned again from its start (the next `,lat=` may be
     // inside), so scanning it whole here would be quadratic.
-    const value = text.slice(valueStart, positionValueEnd(text, valueStart, VALUE_HEAD));
+    const value = text.slice(valueStart, positionValueEnd(text, valueStart, "head"));
     let leaf: string | undefined;
     try {
       leaf = paramLeaf(decodeParamName(m[2] ?? ""));
@@ -408,7 +444,8 @@ function maskParams(
     if (leaf !== undefined && POSITION_PARAMS.has(leaf) && value !== "") sawPosition = true;
     const mask = leaf === undefined ? !isEmptyOrMasked(value) : decide(leaf, value);
     if (mask) {
-      const end = positionValueEnd(text, valueStart);
+      const mode: ValueMode = urlMode ? "url" : leaf === undefined || isAddressLeaf(leaf) ? "address" : "text";
+      const end = positionValueEnd(text, valueStart, mode);
       out += text.slice(last, valueStart) + REDACTED_VALUE;
       last = end;
       PARAM_NAME.lastIndex = end;
@@ -421,12 +458,27 @@ function maskParams(
  * Mask position, address and tRPC-input parameters in free text or a URL.
  * `ctx` adds what the text cannot say itself (the host of an `http.query`).
  */
-function scrubPositionText(text: string, given?: UrlScrubContext): string {
+function scrubPositionText(text: string, given: ScanContext | undefined): string {
   const ctx = urlContext(given, text);
+  const urlMode = given?.url === true;
   // Two passes: an address label may come BEFORE the position that makes it one.
-  const first = maskParams(text, (leaf, value) => !ADDRESS_TEXT_PARAMS.has(leaf) && masksPositionParam(leaf, value, ctx, false));
+  const first = maskParams(
+    text,
+    urlMode,
+    (leaf, value) => !ADDRESS_TEXT_PARAMS.has(leaf) && masksPositionParam(leaf, value, ctx, false),
+  );
   if (!first.sawPosition && ctx.addressApi !== true) return first.out;
-  return maskParams(first.out, (leaf, value) => ADDRESS_TEXT_PARAMS.has(leaf) && masksPositionParam(leaf, value, ctx, true)).out;
+  return maskParams(
+    first.out,
+    urlMode,
+    (leaf, value) => ADDRESS_TEXT_PARAMS.has(leaf) && masksPositionParam(leaf, value, ctx, true),
+  ).out;
+}
+
+/** {@link UrlScrubContext} plus how the text is read (internal). */
+interface ScanContext extends UrlScrubContext {
+  /** The text IS a URL or a query: a value ends only at `&` or `#`. */
+  url?: boolean;
 }
 
 /**
@@ -441,10 +493,26 @@ const POSITION_NUMBER_KV = /\b((?:min|max)?(?:lat|lng|lon)|latitude|longitude)\b
  * matched again on the next pass (`beforeBreadcrumb`, then `beforeSend`).
  */
 const POSITION_ARRAY_KV =
-  /\b(coordinates|coords|latlon|latlng|lnglat|lonlat)\b(\\?["']?\s{0,8}:\s{0,8})\[[\s[]{0,16}-?\d[-\d\s.,eE+[\]]{0,8192}/gi;
+  /\b(coordinates|coords|latlon|latlng|lnglat|lonlat|center|bbox)\b(\\?["']?\s{0,8}:\s{0,8})\[[\s[]{0,16}-?\d[-\d\s.,eE+[\]]*/gi;
 
 /** Gate for the two patterns above. */
-const POSITION_KEY_HINT = /lat|lng|lon|coord/i;
+const POSITION_KEY_HINT = /lat|lng|lon|coord|center|bbox/i;
+
+/**
+ * A position KEY in a dump (`"lat":`, `lng:`): its `"label": "12 rue …"` /
+ * `q` / `text` siblings are then an address (a geocoder suggestion
+ * `{ label, lat, lng }` logged or put in a context).
+ */
+const POSITION_KEY_IN_TEXT = /\b(?:(?:min|max)?(?:lat|lng|lon)|latitude|longitude|coordinates|geom)\b\\?["']?\s{0,8}:/i;
+
+/**
+ * Tiles of a slippy map, `/{z}/{x}/{y}.png`: at street zoom the tile IS the
+ * plot's block. The zoom stays.
+ */
+const MAP_TILE_PATH = /\/(\d{1,2})\/\d{1,8}\/\d{1,8}((?:@\dx)?\.(?:png|jpe?g|webp|avif|pbf|mvt))\b/gi;
+
+/** MapLibre / Leaflet URL hash: `#17.5/49.1193/6.1757`, `#map=17/49.11/6.17`. */
+const MAP_HASH = /#(map=)?(\d{1,2}(?:\.\d{1,4})?)\/-?\d{1,3}(?:\.\d{1,20})?\/-?\d{1,3}(?:\.\d{1,20})?(?:\/[\d.]{1,8}){0,2}/gi;
 
 // ─── Text ──────────────────────────────────────────────────────────────────
 
@@ -473,7 +541,8 @@ function scrubParamValue(lead: string, name: string, value: string, match: strin
       decoded = next;
     }
     if (decoded !== value) {
-      const scrubbed = scrubTextAt(decoded, 1);
+      // A decoded nested URL: its values end only at `&` / `#` (`%2520` became a space).
+      const scrubbed = scrubTextAt(decoded, 1, { url: true });
       if (scrubbed !== decoded) {
         // Re-encode once so the outer URL stays well-formed, but keep the
         // marker literal: a search for `[redacted]` must find it.
@@ -484,7 +553,7 @@ function scrubParamValue(lead: string, name: string, value: string, match: strin
   return match;
 }
 
-function scrubTextAt(text: string, depth: number, ctx?: UrlScrubContext): string {
+function scrubTextAt(text: string, depth: number, ctx?: ScanContext): string {
   if (text.length < 6) return text;
   let out = text;
 
@@ -504,6 +573,20 @@ function scrubTextAt(text: string, depth: number, ctx?: UrlScrubContext): string
   if (hasEquals) out = scrubPositionText(out, ctx);
   if (hasColon && POSITION_KEY_HINT.test(out)) {
     out = out.replace(POSITION_NUMBER_KV, `$1$2${REDACTED_VALUE}`).replace(POSITION_ARRAY_KV, `$1$2${REDACTED_VALUE}`);
+    if ((out.includes('"') || out.includes("'")) && POSITION_KEY_IN_TEXT.test(out)) {
+      out = out.replace(QUOTED_KV, (match, q: string, key: string, sep: string, quoted: string) => {
+        const inner = quoted.slice(1, -1);
+        if (!sep.includes(":") || isEmptyOrMasked(inner) || !ADDRESS_TEXT_PARAMS.has(normaliseName(key))) return match;
+        const mark = quoted[0];
+        return `${q}${key}${q}${sep}${mark}${REDACTED_VALUE}${mark}`;
+      });
+    }
+  }
+  if (out.includes("/")) {
+    if (/\.(?:png|jpe?g|webp|avif|pbf|mvt)/i.test(out)) {
+      out = out.replace(MAP_TILE_PATH, `/$1/${REDACTED_VALUE}/${REDACTED_VALUE}$2`);
+    }
+    if (out.includes("#")) out = out.replace(MAP_HASH, `#$1$2/${REDACTED_VALUE}`);
   }
   if ((hasColon || hasEquals) && (out.includes('"') || out.includes("'"))) {
     out = out.replace(QUOTED_KV, (match, q: string, key: string, sep: string, quoted: string) => {
@@ -574,7 +657,7 @@ export function scrubUrl(url: string, ctx?: UrlScrubContext): string {
       return `${scrubTextAt(url.slice(0, q), 0, urlContext(ctx, url))}?${REDACTED_VALUE}`;
     }
   }
-  return scrubTextAt(url, 0, urlContext(ctx, url));
+  return scrubTextAt(url, 0, { ...urlContext(ctx, url), url: true });
 }
 
 /**
@@ -590,7 +673,7 @@ export function scrubUrlQuery(query: string, ctx?: UrlScrubContext): string {
   }
   // Leading `?` or not, `PARAM_NAME` anchors on `^` / `&`, so the first
   // parameter is found either way.
-  return scrubTextAt(query, 0, ctx);
+  return scrubTextAt(query, 0, { ...ctx, url: true });
 }
 
 /** Keys of breadcrumb and span data that hold a full URL or a path. */
@@ -617,6 +700,31 @@ export function scrubUrlFields(data: unknown): unknown {
   for (const k of QUERY_FIELDS) {
     const v = data[k];
     if (typeof v === "string") next[k] = scrubUrlQuery(v, ctx);
+  }
+  return next;
+}
+
+/**
+ * Breadcrumb `data` at RECORD time (`beforeBreadcrumb`): URL fields, then one
+ * level of keys and strings — top-level arrays (`console` `arguments`) have
+ * their strings scrubbed too. Nested objects are left for `beforeSend`: at
+ * record time they are the app's raw objects (a GeoJSON collection, a DOM
+ * node), which the SDK only normalises (depth 3) when an event is built, and
+ * walking them here would cost every `console.log` on the main thread.
+ */
+export function scrubRecordedBreadcrumbData(data: unknown): unknown {
+  const withUrls = scrubUrlFields(data);
+  if (typeof withUrls === "string") return scrubText(withUrls);
+  if (!isPlainObject(withUrls)) return withUrls;
+  const hasPosition = Object.keys(withUrls).some((k) => isPositionName(k));
+  const next: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(withUrls)) {
+    if (isCredentialKey(k)) next[k] = REDACTED;
+    else if (typeof v === "string") {
+      const addressNextToPosition = hasPosition && ADDRESS_TEXT_PARAMS.has(foldKey(k));
+      next[k] = !isEmptyOrMasked(v) && (addressNextToPosition || isSecretName(k)) ? REDACTED_VALUE : scrubText(v);
+    } else if (Array.isArray(v)) next[k] = v.map((item: unknown) => (typeof item === "string" ? scrubText(item) : item));
+    else next[k] = v;
   }
   return next;
 }
@@ -678,9 +786,15 @@ export function scrubDeep(value: unknown, seen = new WeakSet<object>(), depth = 
 
   if (Array.isArray(value)) return value.map((v) => scrubDeep(v, seen, depth + 1));
 
+  const entries = Object.entries(value as Record<string, unknown>);
+  // `{ label: "12 rue …", lat, lng }`: next to a position, its text is an address.
+  const hasPosition = entries.some(([key]) => isPositionName(key));
   const result: Record<string, unknown> = {};
-  for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
-    result[key] = scrubEntry(key, v, seen, depth);
+  for (const [key, v] of entries) {
+    result[key] =
+      hasPosition && typeof v === "string" && !isEmptyOrMasked(v) && ADDRESS_TEXT_PARAMS.has(foldKey(key))
+        ? REDACTED_VALUE
+        : scrubEntry(key, v, seen, depth);
   }
   return result;
 }
@@ -800,13 +914,24 @@ export function scrubRequestData(data: unknown, seen = new WeakSet<object>()): u
   return scrubText(data);
 }
 
+/** Leaf of a parsed query key; `undefined` when it cannot be decoded (then: fail closed). */
+function queryKeyLeaf(key: string): string | undefined {
+  try {
+    return paramLeaf(decodeParamName(key));
+  } catch {
+    return undefined;
+  }
+}
+
 function scrubQueryValue(key: string, v: unknown, mask: (leaf: string, value: string) => boolean): unknown {
+  const leaf = queryKeyLeaf(key);
   if (typeof v === "string") {
-    return isSecretParam(key, v) || mask(paramLeaf(key), v) ? REDACTED_VALUE : scrubText(v);
+    if (leaf === undefined) return isEmptyOrMasked(v) ? v : REDACTED_VALUE;
+    return isSecretParam(key, v) || mask(leaf, v) ? REDACTED_VALUE : scrubText(v);
   }
   // `?token=a&token=b` parses to `{ token: ["a", "b"] }`.
   if (Array.isArray(v)) return v.map((item) => scrubQueryValue(key, item, mask));
-  if (v !== null && typeof v === "object" && isPositionName(key)) return REDACTED;
+  if (v !== null && typeof v === "object" && (leaf === undefined || POSITION_PARAMS.has(leaf))) return REDACTED;
   return scrubDeep(v);
 }
 
@@ -822,7 +947,9 @@ export function scrubQueryString(qs: unknown, ctx?: UrlScrubContext): unknown {
   }
   const context = urlContext(ctx);
   if (Array.isArray(qs)) {
-    const hasPosition = qs.some((pair) => Array.isArray(pair) && typeof pair[0] === "string" && isPositionName(pair[0]));
+    const hasPosition = qs.some(
+      (pair) => Array.isArray(pair) && typeof pair[0] === "string" && POSITION_PARAMS.has(queryKeyLeaf(pair[0]) ?? ""),
+    );
     const mask = (leaf: string, value: string): boolean => masksPositionParam(leaf, value, context, hasPosition);
     return qs.map((pair) => {
       if (!Array.isArray(pair) || typeof pair[0] !== "string") return scrubDeep(pair);
@@ -832,7 +959,7 @@ export function scrubQueryString(qs: unknown, ctx?: UrlScrubContext): unknown {
   }
   if (qs !== null && typeof qs === "object") {
     const entries = Object.entries(qs as Record<string, unknown>);
-    const hasPosition = entries.some(([k]) => isPositionName(k));
+    const hasPosition = entries.some(([k]) => POSITION_PARAMS.has(queryKeyLeaf(k) ?? ""));
     const mask = (leaf: string, value: string): boolean => masksPositionParam(leaf, value, context, hasPosition);
     const result: Record<string, unknown> = {};
     for (const [k, v] of entries) {

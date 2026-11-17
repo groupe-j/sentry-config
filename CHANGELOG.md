@@ -31,7 +31,16 @@ This project follows [Semantic Versioning](https://semver.org/).
     quand le SDK range la requête à part dans `http.query` — ou à côté d'une
     position dans la même requête ;
   - `input` sur une URL `/trpc/` (`request.query_string` prend le contexte de
-    `request.url` et du nom de transaction), ou dès qu'il porte du JSON.
+    `request.url` et du nom de transaction), ou dès qu'il porte du JSON ;
+  - `label`, `q`, `text` à côté de `lat` / `lng` dans un objet ou un dump JSON
+    (une suggestion de géocodeur `{ label, lat, lng }`) ;
+  - tuiles de carte `/{z}/{x}/{y}.png|pbf` et hash de carte `#17/49.11/6.17` :
+    seul le zoom reste.
+
+  Dans une URL, une valeur court jusqu'au `&` suivant : une adresse non encodée
+  (`?q=12 rue de Metz&limit=5`, que `fetch` accepte) est masquée en entier, et
+  pas seulement jusqu'à la première espace. `server.address` et les autres
+  attributs OTel pointés restent lisibles.
 
   Fail-closed : une URL dont un **nom** de paramètre ne se décode pas perd
   toute sa requête (le chemin reste) ; les valeurs ne sont jamais décodées pour
@@ -40,9 +49,11 @@ This project follows [Semantic Versioning](https://semver.org/).
 ### Added
 
 - **`createSentryBeforeBreadcrumb`**, branché par `initSentryClient`,
-  `initSentryServer` et `initSentryEdge` : le même scrubbing que les
-  breadcrumbs de `beforeSend`, appliqué à l'enregistrement, pour que le tampon
-  de la portée ne garde pas la requête brute. Fail-closed : un breadcrumb dont
+  `initSentryServer` et `initSentryEdge` : le scrubbing des URL, du message et
+  du premier niveau de `data` (chaînes des `arguments` de `console` comprises),
+  appliqué à l'enregistrement, pour que le tampon de la portée ne garde pas la
+  requête brute. Les objets imbriqués restent à `beforeSend` (normalisés par le
+  SDK) : les parcourir ici coûterait chaque `console.log` sur le fil principal. Fail-closed : un breadcrumb dont
   le scrubbing lève garde son type, sa catégorie, son niveau et son horodatage,
   et perd message et données. Exporté aussi par `/client`.
 - `scrubUrl`, `scrubUrlQuery`, `isPositionName` et le type `UrlScrubContext`

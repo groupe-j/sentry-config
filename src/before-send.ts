@@ -17,6 +17,7 @@ import {
   scrubRequestData,
   scrubText,
   scrubUrl,
+  scrubProcedureInput,
   scrubRecordedBreadcrumbData,
   scrubUrlFields,
   urlContextOf,
@@ -176,11 +177,22 @@ function scrubTags(tags: Record<string, unknown>): Record<string, unknown> {
   return result;
 }
 
-/** The root span's data (`contexts.trace.data`) holds the same URL fields as a span's. */
+/**
+ * Before the generic walk: the root span's data (`contexts.trace.data`) holds
+ * the same URL fields as a span's, and `contexts.trpc.procedure_input` (the
+ * SDK's `trpcMiddleware` with `attachRpcInput`) is a procedure input.
+ */
 function withTraceUrlFields(contexts: Record<string, unknown>): Record<string, unknown> {
+  let next = contexts;
   const trace = contexts.trace as { data?: unknown } | undefined;
-  if (!trace || typeof trace !== "object" || trace.data === undefined) return contexts;
-  return { ...contexts, trace: { ...trace, data: scrubUrlFields(trace.data) } };
+  if (trace && typeof trace === "object" && trace.data !== undefined) {
+    next = { ...next, trace: { ...trace, data: scrubUrlFields(trace.data) } };
+  }
+  const trpc = contexts.trpc as { procedure_input?: unknown } | undefined;
+  if (trpc && typeof trpc === "object" && trpc.procedure_input !== undefined) {
+    next = { ...next, trpc: { ...trpc, procedure_input: scrubProcedureInput(trpc.procedure_input) } };
+  }
+  return next;
 }
 
 /**
@@ -232,7 +244,7 @@ function scrubEvent<E extends SentryEventLike>(event: E): E {
       ...r,
       url: typeof r.url === "string" ? scrubUrl(r.url) : r.url,
       env: r.env === undefined ? undefined : (scrubDeep(r.env, seen) as Record<string, unknown>),
-      data: r.data === undefined ? undefined : scrubRequestData(r.data, seen),
+      data: r.data === undefined ? undefined : scrubRequestData(r.data, seen, ctx.trpc === true),
       query_string: r.query_string === undefined ? undefined : scrubQueryString(r.query_string, ctx),
       cookies: r.cookies === undefined ? undefined : scrubCookies(r.cookies),
       headers: r.headers ? scrubHeaderValues(r.headers) : undefined,
@@ -419,34 +431,38 @@ export interface ReplayRecordingEventLike {
   data?: unknown;
 }
 
-/** rrweb `EventType.Meta` (`data.href`: the page URL) and `EventType.Custom` (Sentry frames). */
-const RRWEB_META = 4;
+/** rrweb `EventType.Custom`: the Sentry frames (`breadcrumb`, `performanceSpan`…). */
 const RRWEB_CUSTOM = 5;
 
 /**
  * Optional `beforeAddRecordingEvent` for `replayIntegration` — NOT wired by the
- * init helpers. Session Replay recordings go through none of the event hooks:
- * the page URL of a recording (`/recherche?lng=…&lat=…&label=…`) and the URL of
- * every request it lists (`performanceSpan` frames: `resource.fetch`,
- * `navigation.push`…) reach Sentry as recorded. This applies the URL scrubbing
- * to them: `data.href` of the meta event; `description`, `message` and
- * `data` of breadcrumb and span frames. DOM snapshots and mutations are left
- * to `maskAllText` / `blockAllMedia`.
+ * init helpers. Session Replay recordings go through none of the event hooks.
+ *
+ * Scope, as the SDK calls it (10.76: `maybeApplyCallback` runs the callback on
+ * CUSTOM events only): the Sentry frames of a recording — breadcrumb frames
+ * (`navigation` `to`/`from`, console, fetch) and `performanceSpan` frames, whose
+ * `description` is the URL of each request (`resource.fetch`…) and navigation
+ * (`navigation.push`). This applies the URL scrubbing to their `description`,
+ * `message` and `data`.
+ *
+ * NOT reachable from here: the page URL of the recording (the rrweb meta
+ * event's `href`) and the DOM (snapshots, mutations — left to `maskAllText` /
+ * `blockAllMedia`). Keep a position out of the page URL in the app, or stop
+ * Replay from capturing it.
  *
  *   replayIntegration({ beforeAddRecordingEvent: createReplayBeforeAddRecordingEvent() })
  *
- * Fail-closed: an event whose scrubbing throws is dropped (`null`).
+ * The returned callback is generic, so it is assignable to the SDK's
+ * `beforeAddRecordingEvent` without a cast. Fail-closed: an event whose
+ * scrubbing throws is dropped (`null`).
  */
-export function createReplayBeforeAddRecordingEvent<E extends ReplayRecordingEventLike>(): (event: E) => E | null {
-  return (event: E): E | null => {
+export function createReplayBeforeAddRecordingEvent(): <E extends ReplayRecordingEventLike>(event: E) => E | null {
+  return <E extends ReplayRecordingEventLike>(event: E): E | null => {
     try {
       const data = event.data as Record<string, unknown> | undefined;
-      if (!data || typeof data !== "object") return event;
-      if (event.type === RRWEB_META && typeof data.href === "string") {
-        return { ...event, data: { ...data, href: scrubUrl(data.href) } };
-      }
+      if (event.type !== RRWEB_CUSTOM || !data || typeof data !== "object") return event;
       const payload = data.payload as Record<string, unknown> | undefined;
-      if (event.type !== RRWEB_CUSTOM || !payload || typeof payload !== "object") return event;
+      if (!payload || typeof payload !== "object") return event;
       const next: Record<string, unknown> = { ...payload };
       if (typeof payload.description === "string") next.description = scrubUrl(payload.description);
       if (typeof payload.message === "string") next.message = scrubText(payload.message);

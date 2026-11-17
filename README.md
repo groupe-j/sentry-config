@@ -631,9 +631,13 @@ appear (URLs, free text, and as object keys — a `{ lat: 49.11 }` in `extra` or
 in the tRPC input of `contexts.trpc`); `q` / `query` / `text` / `label` / `ll` /
 `point` on a geocoder or map API (`api-adresse.data.gouv.fr`, `data.geopf.fr`,
 OpenStreetMap/Nominatim, Photon, Google Maps, Mapbox…) or next to a position in
-the same query; and, inside a tRPC `input` (on a `/trpc/` URL, or whenever it
-holds JSON), the same keys: the input is decoded, scrubbed and re-encoded, so
-the rest of the procedure input stays readable (masked whole if unreadable). The parameter name and the rest of the URL stay. A
+the same query; `position` / `point` / `points` holding an object or array and
+`path` / `polyline` holding coordinate pairs. A **procedure input** (tRPC
+`input` of a GET, body of a POST to `/trpc/`, `contexts.trpc.procedure_input`)
+is decoded, scrubbed and re-encoded: its free-text fields (`q`, `query`,
+`search`, `text`, `label`, `adresse`, `address`, `street`, `rue`) are ALWAYS
+masked — an address search has no position to give it away — while ids and
+structured fields stay readable (masked whole if unreadable). The parameter name and the rest of the URL stay. A
 URL whose parameter names cannot be decoded loses its whole query (fail-closed).
 In a URL a value runs to the next `&` (an unencoded `?q=12 rue de Metz&…` is
 masked whole); `label` / `q` / `text` next to `lat` / `lng` in an object or a
@@ -645,7 +649,11 @@ JSON dump are masked too; slippy-map tiles (`/19/{x}/{y}.png`) and the map hash
 URLs) go through none of these hooks. Cover it in the app: keep `maskAllText`,
 leave routes that carry a position out of `networkDetailAllowUrls`, and pass
 the optional `createReplayBeforeAddRecordingEvent()` (exported by `/client` and
-`/client-lazy`) as `replayIntegration({ beforeAddRecordingEvent })`.
+`/client-lazy`) as `replayIntegration({ beforeAddRecordingEvent })`. The SDK
+calls that hook on **custom** events only (breadcrumb and `performanceSpan`
+frames: request and navigation URLs) — it never sees the **page URL** of the
+recording. Keep a position out of the page URL in the app, or do not record
+Replay on those pages.
 `beforeBreadcrumb` (`createSentryBeforeBreadcrumb`) applies the same scrubbing
 when a breadcrumb is recorded.
 

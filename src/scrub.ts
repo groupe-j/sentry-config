@@ -393,7 +393,7 @@ function scrubJsonParam(raw: string): string {
   } catch {
     return REDACTED_VALUE;
   }
-  let out = JSON.stringify(scrubDeep(parsed));
+  let out = JSON.stringify(scrubProcedureInput(parsed));
   // Markers stay encoded inside an encoded value: a literal `]` would end the
   // value early on the next pass over free text (`input=%7B…[REDACTED` → not JSON).
   for (let i = 0; i < layers; i++) out = encodeURIComponent(out);
@@ -507,6 +507,39 @@ function maskParams(
     }
   }
   return { out: last === 0 ? text : out + text.slice(last), sawPosition };
+}
+
+/**
+ * Free-text fields of a procedure input: what the visitor typed. In an
+ * address search (`dossier.suggest` → `{ q: "12 rue de la Paix" }`) it IS the
+ * address, with no position next to it to give it away — so in an input these
+ * are masked whatever their neighbours. Identifiers and structured fields
+ * (`id`, `slug`, `insee`, `page`, `limit`, enums) stay.
+ */
+const INPUT_TEXT_KEYS = new Set(["q", "query", "search", "text", "label", "adresse", "address", "street", "rue"]);
+
+function maskInputText(value: unknown, seen: WeakSet<object>, depth: number): unknown {
+  if (value === null || typeof value !== "object") return value;
+  if (depth > MAX_DEPTH || seen.has(value)) return REDACTED;
+  seen.add(value);
+  if (Array.isArray(value)) return value.map((v: unknown) => maskInputText(v, seen, depth + 1));
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    out[k] =
+      typeof v === "string" && !isEmptyOrMasked(v) && INPUT_TEXT_KEYS.has(foldKey(k)) ? REDACTED_VALUE : maskInputText(v, seen, depth + 1);
+  }
+  return out;
+}
+
+/**
+ * A procedure input (tRPC `input` of a GET, body of a POST to a tRPC route,
+ * `contexts.trpc.procedure_input`): its free-text fields (`q`, `query`,
+ * `search`, `text`, `label`, `adresse`, `address`, `street`, `rue`) are masked
+ * whatever their neighbours, then {@link scrubDeep} applies the position keys
+ * and every other rule.
+ */
+export function scrubProcedureInput(value: unknown): unknown {
+  return scrubDeep(maskInputText(value, new WeakSet<object>(), 0));
 }
 
 /**
@@ -855,9 +888,26 @@ export function scrubDeep(value: unknown, seen = new WeakSet<object>(), depth = 
   return result;
 }
 
+/** Keys whose OBJECT or ARRAY value is a position (`position: { lat, lng }`, `points: [[x, y]…]`); `point: 3` stays. */
+const POSITION_OBJECT_KEYS = new Set(["position", "point", "points"]);
+/** Keys whose value is a position only as an array of coordinate pairs (`path: [[6.17, 49.11]…]`). */
+const COORDINATE_PATH_KEYS = new Set(["path", "polyline"]);
+
+function isNumberPair(p: unknown): boolean {
+  return Array.isArray(p) && p.length >= 2 && typeof p[0] === "number" && typeof p[1] === "number";
+}
+
+/** A key whose value, by its shape, is a position — see the two sets above. */
+function isPositionValue(key: string, v: unknown): boolean {
+  if (v === null || typeof v !== "object") return false;
+  const k = foldKey(key);
+  if (POSITION_OBJECT_KEYS.has(k)) return true;
+  return COORDINATE_PATH_KEYS.has(k) && Array.isArray(v) && v.length > 0 && v.every(isNumberPair);
+}
+
 /** One `key: value` of an object at `depth` — the per-key rule of {@link scrubDeep}. */
 function scrubEntry(key: string, v: unknown, seen: WeakSet<object>, depth: number): unknown {
-  if (isCredentialKey(key)) return REDACTED;
+  if (isCredentialKey(key) || isPositionValue(key, v)) return REDACTED;
   // Credential names outside the key list (`magicToken`, `resetPassword`):
   // only a string is a credential — `tokenCount: 3` stays.
   if (typeof v === "string" && v !== "" && isSecretName(key)) return REDACTED_VALUE;
@@ -953,8 +1003,10 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  * scrubbing, whose quoted `"key":"value"` and `key=value` patterns still apply
  * the key list.
  */
-export function scrubRequestData(data: unknown, seen = new WeakSet<object>()): unknown {
-  if (typeof data !== "string") return scrubDeep(data, seen);
+export function scrubRequestData(data: unknown, seen = new WeakSet<object>(), procedureInput = false): unknown {
+  // The body of a POST to a tRPC route is a procedure input (mutation).
+  const walk = (v: unknown): unknown => (procedureInput ? scrubProcedureInput(v) : scrubDeep(v, seen));
+  if (typeof data !== "string") return walk(data);
   const head = data.trimStart()[0];
   if (head === "{" || head === "[") {
     let parsed: unknown;
@@ -965,7 +1017,7 @@ export function scrubRequestData(data: unknown, seen = new WeakSet<object>()): u
       // applies the key list through its quoted `"key":"value"` pattern.
       return scrubText(data);
     }
-    return JSON.stringify(scrubDeep(parsed, seen));
+    return JSON.stringify(walk(parsed));
   }
   return scrubText(data);
 }

@@ -1,3 +1,4 @@
+import type * as SentryTypes from "@sentry/nextjs";
 import { describe, expect, it } from "vitest";
 import {
   createReplayBeforeAddRecordingEvent,
@@ -528,13 +529,19 @@ describe("position — map `center`, `ll` / `point`", () => {
 describe("createReplayBeforeAddRecordingEvent", () => {
   const hook = createReplayBeforeAddRecordingEvent();
 
-  it("scrubs the page URL of the meta event", () => {
-    const out = hook({ type: 4, timestamp: 1, data: { href: `https://jepeuxconstruire.fr/recherche?lng=${LNG}&lat=${LAT}`, width: 1, height: 1 } });
-    expect(out?.data).toEqual({
-      href: `https://jepeuxconstruire.fr/recherche?lng=${REDACTED_VALUE}&lat=${REDACTED_VALUE}`,
-      width: 1,
-      height: 1,
-    });
+  it("is assignable to the SDK's `beforeAddRecordingEvent` through a variable, without a cast", () => {
+    // Type-level: `tsc --noEmit` (CI typecheck) fails here if the signature drifts (TS2322).
+    type ReplayOptions = NonNullable<Parameters<typeof SentryTypes.replayIntegration>[0]>;
+    const callback = createReplayBeforeAddRecordingEvent();
+    const options: ReplayOptions = { beforeAddRecordingEvent: callback };
+    expect(typeof options.beforeAddRecordingEvent).toBe("function");
+  });
+
+  it("leaves non-custom events as they are — the SDK only calls it on custom frames, so the page URL is out of reach", () => {
+    // SDK 10.76 `maybeApplyCallback`: the callback runs only when `isCustomEvent(event)`
+    // (type 5). The rrweb meta event (type 4, `href` = page URL) never reaches it.
+    const meta = { type: 4, timestamp: 1, data: { href: `https://jepeuxconstruire.fr/recherche?lat=${LAT}`, width: 1, height: 1 } };
+    expect(hook(meta)).toBe(meta);
   });
 
   it("scrubs the URL of a request span and a navigation, keeps their timing", () => {
@@ -583,5 +590,85 @@ describe("createReplayBeforeAddRecordingEvent", () => {
       },
     };
     expect(hook(evil)).toBeNull();
+  });
+});
+
+describe("position — free text of a procedure input (address search)", () => {
+  const ADDRESS_TYPED = "12 rue de la Paix";
+
+  it("masks `q` of `dossier.suggest` with no position next to it — non-batch GET", () => {
+    const input = encodeURIComponent(JSON.stringify({ json: { q: ADDRESS_TYPED, limit: 5 } }));
+    const url = `https://jepeuxconstruire.fr/api/trpc/dossier.suggest?input=${input}`;
+    const event = beforeSend({
+      transaction: "GET /api/trpc/[trpc]",
+      request: { url, query_string: `input=${input}` },
+      breadcrumbs: [{ category: "fetch", data: { method: "GET", url: `/api/trpc/dossier.suggest?input=${input}` } }],
+    });
+    const expected = encodeURIComponent(JSON.stringify({ json: { q: REDACTED_VALUE, limit: 5 } }));
+    expect(event?.request?.url).toBe(`https://jepeuxconstruire.fr/api/trpc/dossier.suggest?input=${expected}`);
+    expect(event?.request?.query_string).toBe(`input=${expected}`);
+    expect((event?.breadcrumbs?.[0]?.data as Record<string, unknown>).url).toBe(`/api/trpc/dossier.suggest?input=${expected}`);
+    expect(JSON.stringify(event)).not.toContain("Paix");
+  });
+
+  it("masks it in the exact batch shape `?batch=1&input={\"0\":{\"json\":{\"q\":…}}}`, raw and encoded", () => {
+    const raw = `{"0":{"json":{"q":"${ADDRESS_TYPED}"}}}`;
+    expect(scrubUrl(`/api/trpc/dossier.suggest?batch=1&input=${raw}`)).toBe(
+      `/api/trpc/dossier.suggest?batch=1&input={"0":{"json":{"q":"${REDACTED_VALUE}"}}}`,
+    );
+    const out = scrubUrl(`/api/trpc/dossier.suggest?batch=1&input=${encodeURIComponent(raw)}`);
+    expect(decodeURIComponent(out)).not.toContain("Paix");
+  });
+
+  it("masks it in a POST body to a tRPC route (`request.data`) and in `contexts.trpc.procedure_input`", () => {
+    const event = beforeSend({
+      request: {
+        url: "https://jepeuxconstruire.fr/api/trpc/dossier.suggest?batch=1",
+        data: JSON.stringify({ 0: { json: { q: ADDRESS_TYPED, street: "rue de la Paix", insee: "57463" } } }),
+      },
+      contexts: { trpc: { procedure_type: "query", procedure_input: { search: ADDRESS_TYPED, page: 2 } } },
+    });
+    expect(JSON.parse(event?.request?.data as string)).toEqual({ 0: { json: { q: REDACTED_VALUE, street: REDACTED_VALUE, insee: "57463" } } });
+    expect((event?.contexts?.trpc as Record<string, unknown>).procedure_input).toEqual({ search: REDACTED_VALUE, page: 2 });
+  });
+
+  it("keeps identifiers and structured fields of an input", () => {
+    const input = { json: { id: "ckx1", slug: "metz", insee: "57463", page: 2, limit: 10, status: "pending" } };
+    const encoded = encodeURIComponent(JSON.stringify(input));
+    expect(scrubUrl(`/api/trpc/dossier.list?input=${encoded}`)).toBe(`/api/trpc/dossier.list?input=${encoded}`);
+  });
+});
+
+describe("position — keys whose value is a position by its shape", () => {
+  it("masks `position`, `point`, `points` objects and arrays; keeps a scalar", () => {
+    const event = beforeSend({
+      extra: {
+        marker: { position: { lat: Number(LAT), lng: Number(LNG) }, title: "x" },
+        click: { point: { x: 512, y: 300 } },
+        shape: { points: [[Number(LNG), Number(LAT)]] },
+        quiz: { point: 3, position: 1 },
+      },
+    });
+    expect(event?.extra).toEqual({
+      marker: { position: REDACTED, title: "x" },
+      click: { point: REDACTED },
+      shape: { points: REDACTED },
+      quiz: { point: 3, position: 1 },
+    });
+  });
+
+  it("masks `path` / `polyline` arrays of coordinate pairs, keeps any other `path`", () => {
+    const event = beforeSend({
+      extra: {
+        route: { path: [[Number(LNG), Number(LAT)], [6.18, 49.12]], polyline: [[1.5, 2.5]] },
+        trpc: { path: "dossier.suggest" },
+        files: { path: ["a", "b"] },
+      },
+    });
+    expect(event?.extra).toEqual({
+      route: { path: REDACTED, polyline: REDACTED },
+      trpc: { path: "dossier.suggest" },
+      files: { path: ["a", "b"] },
+    });
   });
 });

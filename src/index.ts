@@ -31,6 +31,7 @@ export {
   isSecretParam,
   scrubCookies,
   scrubDeep,
+  scrubProcedureInput,
   scrubQueryString,
   scrubRequestData,
   scrubText,

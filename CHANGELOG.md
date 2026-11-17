@@ -10,7 +10,8 @@ This project follows [Semantic Versioning](https://semver.org/).
 - **La position d'un visiteur ne part plus dans les événements ni dans les
   breadcrumbs Sentry** — mais toujours dans les enregistrements **Session
   Replay** (URL de page et de ressources), que rien ici ne branche par défaut :
-  voir `createReplayBeforeAddRecordingEvent` plus bas, et à couvrir côté app.
+  voir `createReplayBeforeAddRecordingEvent` plus bas, et à couvrir côté app ;
+  l'URL de la page enregistrée n'est atteignable par aucun hook du paquet.
 
   Les coordonnées du terrain cherché (l'adresse d'un particulier) partaient en
   clair dans les breadcrumbs d'appels sortants du SDK Node (`http.query` :
@@ -30,18 +31,26 @@ This project follows [Semantic Versioning](https://semver.org/).
     partout : URL, texte libre, et comme **clé d'objet** (`{ lat: 49.11 }` dans
     `extra`, `contexts`, un corps de mutation) ; `"lat": 49.11` et
     `"coordinates": [[…]]` dans un texte aussi ;
+  - par la forme de leur valeur : `position`, `point`, `points` quand ils
+    portent un objet ou un tableau (`position: { lat, lng }`, `points: [[x, y]]` —
+    `point: 3` reste), `path` / `polyline` quand ils portent un tableau de paires
+    de nombres (`path: "dossier.suggest"` reste) ;
   - `q`, `query`, `text`, `label`, `ll`, `point` sur un géocodeur ou une API
     de carte (`api-adresse.data.gouv.fr`, `data.geopf.fr`, `wxs.ign.fr`,
     OpenStreetMap/Nominatim, Photon, Google Maps, Mapbox, MapTiler) — l'hôte est
     lu dans `url` quand le SDK range la requête à part dans `http.query` — ou à
     côté d'une position dans la même requête, le même objet ou le même dump
     JSON (une suggestion de géocodeur `{ label, lat, lng }`) ;
-  - `input` tRPC (URL `/trpc/`, ou tout `input` qui porte du JSON) : **décodé**
-    (une ou deux fois), parcouru par le scrubbing en profondeur, **ré-encodé** —
-    seules les clés de position et l'adresse à côté partent, le reste de
-    l'entrée de la procédure reste lisible (`{"0":{"json":{"id":"abc"}}}` est
-    conservé tel quel, batch compris). Illisible, non JSON ou plus de 64 Ko :
-    masqué en bloc ;
+  - **entrée d'une procédure** — `input` tRPC d'un GET (URL `/trpc/`, ou tout
+    `input` qui porte du JSON), corps d'un POST vers une route `/trpc/`,
+    `contexts.trpc.procedure_input` : **décodée** (une ou deux fois), parcourue
+    par le scrubbing en profondeur, **ré-encodée**. Ses champs de texte libre —
+    `q`, `query`, `search`, `text`, `label`, `adresse`, `address`, `street`,
+    `rue` — sont masqués **toujours**, position voisine ou non : la recherche
+    d'adresse (`dossier.suggest` → `{ q: "12 rue de la Paix" }`) n'a pas de
+    position pour la trahir. Identifiants et champs structurés (`id`, `slug`,
+    `insee`, `page`, `limit`, enums) restent lisibles, batch compris.
+    Illisible, non JSON ou plus de 64 Ko : masquée en bloc ;
   - tuiles de carte `/{z}/{x}/{y}.png|pbf` et hash de carte `#17/49.11/6.17` :
     seul le zoom reste.
 
@@ -74,19 +83,23 @@ This project follows [Semantic Versioning](https://semver.org/).
   catégorie, son niveau et son horodatage, et perd message et données. Exporté
   aussi par `/client` et `/client-lazy`.
 - **`createReplayBeforeAddRecordingEvent`** (optionnel, **non branché** par
-  défaut) : `beforeAddRecordingEvent` pour `replayIntegration`, qui applique le
-  scrubbing d'URL aux enregistrements — `href` de l'événement meta (URL de la
-  page), `description` / `message` / `data` des frames breadcrumb et
-  `performanceSpan` (`resource.fetch`, `navigation.push`…). Le DOM reste à
-  `maskAllText` / `blockAllMedia`. Fail-closed : un événement qui ne se
-  scrubbe pas est abandonné. Exporté par `/client`, `/client-lazy` et le
-  barrel.
+  défaut) : `beforeAddRecordingEvent` pour `replayIntegration`. Le SDK (10.76,
+  `maybeApplyCallback`) ne l'appelle **que sur les événements Custom** : il
+  scrubbe donc les frames breadcrumb et `performanceSpan` d'un enregistrement —
+  `description` (URL de chaque requête `resource.fetch`, de chaque
+  `navigation.push`), `message`, `data`. Il n'atteint **ni l'URL de la page**
+  (événement meta rrweb), **ni le DOM** (laissé à `maskAllText` /
+  `blockAllMedia`). Assignable à `beforeAddRecordingEvent` sans cast (rappel
+  générique). Fail-closed : un événement qui ne se scrubbe pas est abandonné.
+  Exporté par `/client`, `/client-lazy` et le barrel.
 
   **Replay reste à couvrir côté app** : `maskAllText` (défaut du paquet),
   `networkDetailAllowUrls` sans les routes qui portent une position (les corps
-  et en-têtes n'y sont capturés que pour ces URL), et ce
-  `beforeAddRecordingEvent` passé à `replayIntegration`.
-- `scrubUrl`, `scrubUrlQuery`, `isPositionName` et les types
+  et en-têtes n'y sont capturés que pour ces URL), ce
+  `beforeAddRecordingEvent` passé à `replayIntegration`, et **l'URL de la
+  page** autrement : ne pas mettre la position dans l'URL côté app (état en
+  mémoire plutôt que `?lng=…&lat=…`), ou ne pas enregistrer Replay sur ces pages.
+- `scrubUrl`, `scrubUrlQuery`, `scrubProcedureInput`, `isPositionName` et les types
   `UrlScrubContext` / `ReplayRecordingEventLike` dans le barrel.
 
 - **`createSentryBeforeSend` jette les événements d'un runtime JS non-navigateur

@@ -43,14 +43,18 @@ This project follows [Semantic Versioning](https://semver.org/).
     JSON (une suggestion de géocodeur `{ label, lat, lng }`) ;
   - **entrée d'une procédure** — `input` tRPC d'un GET (URL `/trpc/`, ou tout
     `input` qui porte du JSON), corps d'un POST vers une route `/trpc/`,
-    `contexts.trpc.procedure_input` : **décodée** (une ou deux fois), parcourue
-    par le scrubbing en profondeur, **ré-encodée**. Ses champs de texte libre —
-    `q`, `query`, `search`, `text`, `label`, `adresse`, `address`, `street`,
-    `rue` — sont masqués **toujours**, position voisine ou non : la recherche
+    `contexts.trpc.input` (là où le `trpcMiddleware` du SDK la range, avec
+    `attachRpcInput` — défaut de `createSentryTrpcMiddleware`), `extra.input` /
+    `extra.rawInput` : **décodée** (une ou deux fois), parcourue par le
+    scrubbing en profondeur, **ré-encodée**. Ses champs de texte libre — `q`,
+    `query`, `search`, `term`, `keyword`, `text`, `label`, `adresse`,
+    `address`, `street`, `rue` (chaîne, ou chaque chaîne d'une liste) — sont
+    masqués **toujours**, position voisine ou non : la recherche
     d'adresse (`dossier.suggest` → `{ q: "12 rue de la Paix" }`) n'a pas de
     position pour la trahir. Identifiants et champs structurés (`id`, `slug`,
     `insee`, `page`, `limit`, enums) restent lisibles, batch compris.
-    Illisible, non JSON ou plus de 64 Ko : masquée en bloc ;
+    Illisible, non JSON, plus de 64 Ko, ou chaîne nue (la procédure prend le
+    texte tapé lui-même) : masquée en bloc ;
   - tuiles de carte `/{z}/{x}/{y}.png|pbf` et hash de carte `#17/49.11/6.17` :
     seul le zoom reste.
 

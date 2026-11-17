@@ -633,9 +633,10 @@ in the tRPC input of `contexts.trpc`); `q` / `query` / `text` / `label` / `ll` /
 OpenStreetMap/Nominatim, Photon, Google Maps, Mapbox…) or next to a position in
 the same query; `position` / `point` / `points` holding an object or array and
 `path` / `polyline` holding coordinate pairs. A **procedure input** (tRPC
-`input` of a GET, body of a POST to `/trpc/`, `contexts.trpc.procedure_input`)
-is decoded, scrubbed and re-encoded: its free-text fields (`q`, `query`,
-`search`, `text`, `label`, `adresse`, `address`, `street`, `rue`) are ALWAYS
+`input` of a GET, body of a POST to `/trpc/`, `contexts.trpc.input` set by the
+SDK's `trpcMiddleware`, `extra.input` / `extra.rawInput`) is decoded, scrubbed
+and re-encoded: its free-text fields (`q`, `query`, `search`, `term`,
+`keyword`, `text`, `label`, `adresse`, `address`, `street`, `rue`) are ALWAYS
 masked — an address search has no position to give it away — while ids and
 structured fields stay readable (masked whole if unreadable). The parameter name and the rest of the URL stay. A
 URL whose parameter names cannot be decoded loses its whole query (fail-closed).

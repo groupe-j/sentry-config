@@ -516,7 +516,22 @@ function maskParams(
  * are masked whatever their neighbours. Identifiers and structured fields
  * (`id`, `slug`, `insee`, `page`, `limit`, enums) stay.
  */
-const INPUT_TEXT_KEYS = new Set(["q", "query", "search", "text", "label", "adresse", "address", "street", "rue"]);
+const INPUT_TEXT_KEYS = new Set([
+  "q",
+  "query",
+  "search",
+  "searchterm",
+  "term",
+  "terms",
+  "keyword",
+  "keywords",
+  "text",
+  "label",
+  "adresse",
+  "address",
+  "street",
+  "rue",
+]);
 
 function maskInputText(value: unknown, seen: WeakSet<object>, depth: number): unknown {
   if (value === null || typeof value !== "object") return value;
@@ -525,20 +540,30 @@ function maskInputText(value: unknown, seen: WeakSet<object>, depth: number): un
   if (Array.isArray(value)) return value.map((v: unknown) => maskInputText(v, seen, depth + 1));
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    out[k] =
-      typeof v === "string" && !isEmptyOrMasked(v) && INPUT_TEXT_KEYS.has(foldKey(k)) ? REDACTED_VALUE : maskInputText(v, seen, depth + 1);
+    if (!INPUT_TEXT_KEYS.has(foldKey(k))) out[k] = maskInputText(v, seen, depth + 1);
+    else if (typeof v === "string") out[k] = isEmptyOrMasked(v) ? v : REDACTED_VALUE;
+    // `q: ["12 rue …", "Metz"]`: every string of the list.
+    else if (Array.isArray(v)) {
+      out[k] = v.map((item: unknown) =>
+        typeof item === "string" ? (isEmptyOrMasked(item) ? item : REDACTED_VALUE) : maskInputText(item, seen, depth + 1),
+      );
+    } else out[k] = maskInputText(v, seen, depth + 1);
   }
   return out;
 }
 
 /**
  * A procedure input (tRPC `input` of a GET, body of a POST to a tRPC route,
- * `contexts.trpc.procedure_input`): its free-text fields (`q`, `query`,
- * `search`, `text`, `label`, `adresse`, `address`, `street`, `rue`) are masked
- * whatever their neighbours, then {@link scrubDeep} applies the position keys
- * and every other rule.
+ * `contexts.trpc.input` set by the SDK's `trpcMiddleware`, `extra.input` /
+ * `extra.rawInput`): its free-text fields (`q`, `query`, `search`, `term`,
+ * `keyword`, `text`, `label`, `adresse`, `address`, `street`, `rue`…) are
+ * masked whatever their neighbours — strings, or every string of a list — then
+ * {@link scrubDeep} applies the position keys and every other rule. A string
+ * input is read as (possibly URL-encoded) JSON; a bare string input — the
+ * procedure takes the typed text itself — is masked whole.
  */
 export function scrubProcedureInput(value: unknown): unknown {
+  if (typeof value === "string") return isEmptyOrMasked(value) ? value : scrubJsonParam(value);
   return scrubDeep(maskInputText(value, new WeakSet<object>(), 0));
 }
 

@@ -179,8 +179,11 @@ function scrubTags(tags: Record<string, unknown>): Record<string, unknown> {
 
 /**
  * Before the generic walk: the root span's data (`contexts.trace.data`) holds
- * the same URL fields as a span's, and `contexts.trpc.procedure_input` (the
- * SDK's `trpcMiddleware` with `attachRpcInput`) is a procedure input.
+ * the same URL fields as a span's, and `contexts.trpc.input` is a procedure
+ * input — the SDK's `trpcMiddleware` puts it there (`@sentry/core` 10.76
+ * `trpc.js`) when `attachRpcInput` is on, the default of
+ * `createSentryTrpcMiddleware`. `procedure_input` is read too, for an app
+ * that set the context by hand under that name.
  */
 function withTraceUrlFields(contexts: Record<string, unknown>): Record<string, unknown> {
   let next = contexts;
@@ -188,9 +191,16 @@ function withTraceUrlFields(contexts: Record<string, unknown>): Record<string, u
   if (trace && typeof trace === "object" && trace.data !== undefined) {
     next = { ...next, trace: { ...trace, data: scrubUrlFields(trace.data) } };
   }
-  const trpc = contexts.trpc as { procedure_input?: unknown } | undefined;
-  if (trpc && typeof trpc === "object" && trpc.procedure_input !== undefined) {
-    next = { ...next, trpc: { ...trpc, procedure_input: scrubProcedureInput(trpc.procedure_input) } };
+  const trpc = contexts.trpc as Record<string, unknown> | undefined;
+  if (trpc && typeof trpc === "object") next = { ...next, trpc: withProcedureInputs(trpc, ["input", "procedure_input"]) };
+  return next;
+}
+
+/** `holder` with each of `keys` read as a procedure input (`scrubProcedureInput`). */
+function withProcedureInputs(holder: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
+  let next = holder;
+  for (const key of keys) {
+    if (holder[key] !== undefined) next = { ...next, [key]: scrubProcedureInput(holder[key]) };
   }
   return next;
 }
@@ -271,7 +281,8 @@ function scrubEvent<E extends SentryEventLike>(event: E): E {
 
   if (event.breadcrumbs) next.breadcrumbs = event.breadcrumbs.map((b) => scrubBreadcrumb(b, seen));
 
-  if (event.extra) next.extra = scrubDeep(event.extra, seen) as Record<string, unknown>;
+  // `extra.input` / `extra.rawInput`: what apps name a procedure input they attach by hand.
+  if (event.extra) next.extra = scrubDeep(withProcedureInputs(event.extra, ["input", "rawInput"]), seen) as Record<string, unknown>;
   if (event.contexts) next.contexts = scrubContexts(withTraceUrlFields(event.contexts), seen) as Record<string, unknown>;
 
   if (event.spans) {

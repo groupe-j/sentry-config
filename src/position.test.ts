@@ -167,11 +167,12 @@ describe("position — server event of a tRPC GET (`request`)", () => {
     expect(scrubUrl("/recherche?input=search-box")).toBe("/recherche?input=search-box");
   });
 
-  it("masks a procedure input attached by `trpcMiddleware` (`contexts.trpc`), numbers included", () => {
+  it("masks a procedure input attached by `trpcMiddleware` (`contexts.trpc.input`), numbers included", () => {
+    // Shape written by @sentry/core 10.76 `trpc.js`: `{ procedure_path, procedure_type, input }`.
     const event = beforeSend({
-      contexts: { trpc: { procedure_type: "query", procedure_input: { lng: Number(LNG), lat: Number(LAT), insee: "57463" } } },
+      contexts: { trpc: { procedure_path: "carte.parcelles", procedure_type: "query", input: { lng: Number(LNG), lat: Number(LAT), insee: "57463" } } },
     });
-    expect((event?.contexts?.trpc as Record<string, unknown>).procedure_input).toEqual({
+    expect((event?.contexts?.trpc as Record<string, unknown>).input).toEqual({
       lng: REDACTED,
       lat: REDACTED,
       insee: "57463",
@@ -620,16 +621,37 @@ describe("position — free text of a procedure input (address search)", () => {
     expect(decodeURIComponent(out)).not.toContain("Paix");
   });
 
-  it("masks it in a POST body to a tRPC route (`request.data`) and in `contexts.trpc.procedure_input`", () => {
+  it("masks it in a POST body to a tRPC route (`request.data`) and in `contexts.trpc.input` (SDK shape)", () => {
     const event = beforeSend({
       request: {
         url: "https://jepeuxconstruire.fr/api/trpc/dossier.suggest?batch=1",
         data: JSON.stringify({ 0: { json: { q: ADDRESS_TYPED, street: "rue de la Paix", insee: "57463" } } }),
       },
-      contexts: { trpc: { procedure_type: "query", procedure_input: { search: ADDRESS_TYPED, page: 2 } } },
+      contexts: {
+        trpc: { procedure_path: "dossier.suggest", procedure_type: "query", input: { 0: { json: { q: ADDRESS_TYPED, limit: 5 } } } },
+      },
     });
     expect(JSON.parse(event?.request?.data as string)).toEqual({ 0: { json: { q: REDACTED_VALUE, street: REDACTED_VALUE, insee: "57463" } } });
-    expect((event?.contexts?.trpc as Record<string, unknown>).procedure_input).toEqual({ search: REDACTED_VALUE, page: 2 });
+    expect((event?.contexts?.trpc as Record<string, unknown>).input).toEqual({ 0: { json: { q: REDACTED_VALUE, limit: 5 } } });
+    expect(JSON.stringify(event)).not.toContain("Paix");
+  });
+
+  it("also reads a hand-set `contexts.trpc.procedure_input`, `extra.input` / `extra.rawInput`", () => {
+    const event = beforeSend({
+      contexts: { trpc: { procedure_input: { q: ADDRESS_TYPED } } },
+      extra: { input: { term: ADDRESS_TYPED, id: "x" }, rawInput: JSON.stringify({ keyword: ADDRESS_TYPED }), other: { q: "permis" } },
+    });
+    expect(JSON.stringify(event)).not.toContain("Paix");
+    expect(event?.extra?.input).toEqual({ term: REDACTED_VALUE, id: "x" });
+    // Outside a procedure input, `q` alone stays a diagnostic.
+    expect(event?.extra?.other).toEqual({ q: "permis" });
+  });
+
+  it("masks every string of a list under a text key, and a bare string input", () => {
+    const event = beforeSend({ contexts: { trpc: { input: { q: [ADDRESS_TYPED, "Metz"], ids: ["a"] } } } });
+    expect((event?.contexts?.trpc as Record<string, unknown>).input).toEqual({ q: [REDACTED_VALUE, REDACTED_VALUE], ids: ["a"] });
+    const bare = beforeSend({ contexts: { trpc: { input: ADDRESS_TYPED } } });
+    expect((bare?.contexts?.trpc as Record<string, unknown>).input).toBe(REDACTED_VALUE);
   });
 
   it("keeps identifiers and structured fields of an input", () => {

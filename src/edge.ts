@@ -10,7 +10,11 @@
  */
 
 import * as Sentry from "@sentry/nextjs";
-import { createSentryBeforeSend, createSentryBeforeSendTransaction } from "./before-send.js";
+import {
+  createSentryBeforeBreadcrumb,
+  createSentryBeforeSend,
+  createSentryBeforeSendTransaction,
+} from "./before-send.js";
 import { DEFAULT_IGNORED_ERRORS } from "./ignored.js";
 import {
   SENTRY_ENABLED,
@@ -42,5 +46,6 @@ export function initSentryEdge(opts: InitSentryEdgeOptions): void {
     ignoreErrors: [...DEFAULT_IGNORED_ERRORS, ...ignoreErrors],
     beforeSend: createSentryBeforeSend(app),
     beforeSendTransaction: createSentryBeforeSendTransaction(),
+    beforeBreadcrumb: createSentryBeforeBreadcrumb(),
   });
 }

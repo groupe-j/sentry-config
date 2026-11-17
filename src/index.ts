@@ -12,16 +12,19 @@
 
 export {
   SCRUB_FAILED_TAG,
+  createSentryBeforeBreadcrumb,
   createSentryBeforeSend,
   createSentryBeforeSendLog,
   createSentryBeforeSendTransaction,
   scrubSentryEvent,
+  type SentryBreadcrumbLike,
   type SentryEventLike,
   type SentryLogLike,
 } from "./before-send.js";
 
 export {
   REDACTED_VALUE,
+  isPositionName,
   isSecretName,
   isSecretParam,
   scrubCookies,
@@ -29,6 +32,9 @@ export {
   scrubQueryString,
   scrubRequestData,
   scrubText,
+  scrubUrl,
+  scrubUrlQuery,
+  type UrlScrubContext,
 } from "./scrub.js";
 
 export {

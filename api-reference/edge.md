@@ -4,7 +4,7 @@
 
 ### InitSentryEdgeOptions
 
-Defined in: [edge.ts:22](https://github.com/groupe-j/sentry-config/blob/main/src/edge.ts#L22)
+Defined in: [edge.ts:26](https://github.com/groupe-j/sentry-config/blob/main/src/edge.ts#L26)
 
 #### Properties
 
@@ -12,7 +12,7 @@ Defined in: [edge.ts:22](https://github.com/groupe-j/sentry-config/blob/main/src
 
 > **app**: `string`
 
-Defined in: [edge.ts:24](https://github.com/groupe-j/sentry-config/blob/main/src/edge.ts#L24)
+Defined in: [edge.ts:28](https://github.com/groupe-j/sentry-config/blob/main/src/edge.ts#L28)
 
 App name — tagged on every event.
 
@@ -20,7 +20,7 @@ App name — tagged on every event.
 
 > `optional` **dsn?**: `string`
 
-Defined in: [edge.ts:26](https://github.com/groupe-j/sentry-config/blob/main/src/edge.ts#L26)
+Defined in: [edge.ts:30](https://github.com/groupe-j/sentry-config/blob/main/src/edge.ts#L30)
 
 Override the DSN (default: process.env.SENTRY_DSN).
 
@@ -28,7 +28,7 @@ Override the DSN (default: process.env.SENTRY_DSN).
 
 > `optional` **ignoreErrors?**: (`string` \| `RegExp`)[]
 
-Defined in: [edge.ts:28](https://github.com/groupe-j/sentry-config/blob/main/src/edge.ts#L28)
+Defined in: [edge.ts:32](https://github.com/groupe-j/sentry-config/blob/main/src/edge.ts#L32)
 
 Extra error patterns to ignore.
 
@@ -38,7 +38,7 @@ Extra error patterns to ignore.
 
 > **initSentryEdge**(`opts`): `void`
 
-Defined in: [edge.ts:31](https://github.com/groupe-j/sentry-config/blob/main/src/edge.ts#L31)
+Defined in: [edge.ts:35](https://github.com/groupe-j/sentry-config/blob/main/src/edge.ts#L35)
 
 #### Parameters
 

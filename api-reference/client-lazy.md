@@ -16,7 +16,7 @@ Defined in: [client-lazy.ts:85](https://github.com/groupe-j/sentry-config/blob/m
 
 > **app**: `string`
 
-Defined in: [client-core.ts:56](https://github.com/groupe-j/sentry-config/blob/main/src/client-core.ts#L56)
+Defined in: [client-core.ts:60](https://github.com/groupe-j/sentry-config/blob/main/src/client-core.ts#L60)
 
 App name — tagged on every event for multi-tenant dashboards.
 
@@ -28,7 +28,7 @@ App name — tagged on every event for multi-tenant dashboards.
 
 > `optional` **dsn?**: `string`
 
-Defined in: [client-core.ts:58](https://github.com/groupe-j/sentry-config/blob/main/src/client-core.ts#L58)
+Defined in: [client-core.ts:62](https://github.com/groupe-j/sentry-config/blob/main/src/client-core.ts#L62)
 
 Override the public DSN (default: process.env.NEXT_PUBLIC_SENTRY_DSN).
 
@@ -40,7 +40,7 @@ Override the public DSN (default: process.env.NEXT_PUBLIC_SENTRY_DSN).
 
 > `optional` **enabled?**: () => `boolean`
 
-Defined in: [client-core.ts:60](https://github.com/groupe-j/sentry-config/blob/main/src/client-core.ts#L60)
+Defined in: [client-core.ts:64](https://github.com/groupe-j/sentry-config/blob/main/src/client-core.ts#L64)
 
 Disable Sentry when this returns false (e.g. cookie consent gate). Evaluated once, at init.
 
@@ -56,7 +56,7 @@ Disable Sentry when this returns false (e.g. cookie consent gate). Evaluated onc
 
 > `optional` **ignoreErrors?**: (`string` \| `RegExp`)[]
 
-Defined in: [client-core.ts:109](https://github.com/groupe-j/sentry-config/blob/main/src/client-core.ts#L109)
+Defined in: [client-core.ts:113](https://github.com/groupe-j/sentry-config/blob/main/src/client-core.ts#L113)
 
 Extra error patterns to ignore (merged with DEFAULT_IGNORED_ERRORS).
 
@@ -85,7 +85,7 @@ none to save; it just zeroes `replaysOnErrorSampleRate`.
 
 > `optional` **replayBlockAllMedia?**: `boolean`
 
-Defined in: [client-core.ts:113](https://github.com/groupe-j/sentry-config/blob/main/src/client-core.ts#L113)
+Defined in: [client-core.ts:117](https://github.com/groupe-j/sentry-config/blob/main/src/client-core.ts#L117)
 
 Block media in Replay (default true).
 
@@ -97,7 +97,7 @@ Block media in Replay (default true).
 
 > `optional` **replayCdnBaseUrl?**: `string`
 
-Defined in: [client-core.ts:136](https://github.com/groupe-j/sentry-config/blob/main/src/client-core.ts#L136)
+Defined in: [client-core.ts:140](https://github.com/groupe-j/sentry-config/blob/main/src/client-core.ts#L140)
 
 Origin to fetch the lazily-loaded Replay bundle from. Defaults to Sentry's
 public CDN (`https://browser.sentry-cdn.com`). Point it at your own origin
@@ -119,7 +119,7 @@ point this at, or you get a 404 and no Replay.
 
 > `optional` **replayConsent?**: () => `boolean`
 
-Defined in: [client-core.ts:107](https://github.com/groupe-j/sentry-config/blob/main/src/client-core.ts#L107)
+Defined in: [client-core.ts:111](https://github.com/groupe-j/sentry-config/blob/main/src/client-core.ts#L111)
 
 Gate **Replay alone**, without gating Sentry. Return `false` to skip the
 attach; return `true` to allow it.
@@ -181,7 +181,7 @@ Ignored when Replay is eager (`@groupe-j/sentry-config/client` with
 
 > `optional` **replayMaskAllText?**: `boolean`
 
-Defined in: [client-core.ts:111](https://github.com/groupe-j/sentry-config/blob/main/src/client-core.ts#L111)
+Defined in: [client-core.ts:115](https://github.com/groupe-j/sentry-config/blob/main/src/client-core.ts#L115)
 
 Mask all text in Replay (default true — safe). Set false only if no PII risk.
 
@@ -193,7 +193,7 @@ Mask all text in Replay (default true — safe). Set false only if no PII risk.
 
 > `optional` **replayScriptNonce?**: `string`
 
-Defined in: [client-core.ts:141](https://github.com/groupe-j/sentry-config/blob/main/src/client-core.ts#L141)
+Defined in: [client-core.ts:145](https://github.com/groupe-j/sentry-config/blob/main/src/client-core.ts#L145)
 
 Nonce forwarded to the lazily injected `<script>` tag, for apps running a
 strict `script-src 'nonce-…'` CSP. Ignored when Replay is eager.
@@ -206,7 +206,7 @@ strict `script-src 'nonce-…'` CSP. Ignored when Replay is eager.
 
 > `optional` **sendDefaultPii?**: `boolean`
 
-Defined in: [client-core.ts:146](https://github.com/groupe-j/sentry-config/blob/main/src/client-core.ts#L146)
+Defined in: [client-core.ts:150](https://github.com/groupe-j/sentry-config/blob/main/src/client-core.ts#L150)
 
 Send default PII (cookies, headers, IP). Default: false (RGPD-safer).
 Set true only when you have explicit user consent and need the data.
@@ -219,7 +219,7 @@ Set true only when you have explicit user consent and need the data.
 
 > `optional` **tracesSampleRate?**: `number`
 
-Defined in: [client-core.ts:178](https://github.com/groupe-j/sentry-config/blob/main/src/client-core.ts#L178)
+Defined in: [client-core.ts:182](https://github.com/groupe-j/sentry-config/blob/main/src/client-core.ts#L182)
 
 Fraction of browser pageloads / navigations that get a trace, in `[0, 1]`.
 
@@ -259,7 +259,7 @@ Precedence: this option > `NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE` > default.
 
 > `optional` **tunnel?**: `string`
 
-Defined in: [client-core.ts:122](https://github.com/groupe-j/sentry-config/blob/main/src/client-core.ts#L122)
+Defined in: [client-core.ts:126](https://github.com/groupe-j/sentry-config/blob/main/src/client-core.ts#L126)
 
 Same-origin tunnel route to bypass ad-blockers. Match the tunnelRoute you
 set in `withSentryConfig`. Example: `'/monitoring'`. Default: none.

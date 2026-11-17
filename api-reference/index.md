@@ -64,9 +64,55 @@ Timezone for the schedule. Default: UTC (Vercel cron default).
 
 ***
 
+### SentryBreadcrumbLike
+
+Defined in: [before-send.ts:39](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L39)
+
+Loose Sentry breadcrumb shape (`beforeBreadcrumb`, `event.breadcrumbs`).
+
+#### Properties
+
+##### category?
+
+> `optional` **category?**: `string`
+
+Defined in: [before-send.ts:41](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L41)
+
+##### data?
+
+> `optional` **data?**: `unknown`
+
+Defined in: [before-send.ts:44](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L44)
+
+##### level?
+
+> `optional` **level?**: `string`
+
+Defined in: [before-send.ts:42](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L42)
+
+##### message?
+
+> `optional` **message?**: `string`
+
+Defined in: [before-send.ts:43](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L43)
+
+##### timestamp?
+
+> `optional` **timestamp?**: `number`
+
+Defined in: [before-send.ts:45](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L45)
+
+##### type?
+
+> `optional` **type?**: `string`
+
+Defined in: [before-send.ts:40](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L40)
+
+***
+
 ### SentryEventLike
 
-Defined in: [before-send.ts:37](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L37)
+Defined in: [before-send.ts:50](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L50)
 
 @groupe-j/sentry-config — barrel export.
 
@@ -82,29 +128,21 @@ setSentryUser, isBot) for advanced use cases.
 
 ##### breadcrumbs?
 
-> `optional` **breadcrumbs?**: `object`[]
+> `optional` **breadcrumbs?**: [`SentryBreadcrumbLike`](#sentrybreadcrumblike)[]
 
-Defined in: [before-send.ts:51](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L51)
-
-###### data?
-
-> `optional` **data?**: `unknown`
-
-###### message?
-
-> `optional` **message?**: `string`
+Defined in: [before-send.ts:64](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L64)
 
 ##### contexts?
 
 > `optional` **contexts?**: `Record`\<`string`, `unknown`\>
 
-Defined in: [before-send.ts:53](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L53)
+Defined in: [before-send.ts:66](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L66)
 
 ##### exception?
 
 > `optional` **exception?**: `object`
 
-Defined in: [before-send.ts:54](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L54)
+Defined in: [before-send.ts:67](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L67)
 
 ###### values?
 
@@ -114,19 +152,19 @@ Defined in: [before-send.ts:54](https://github.com/groupe-j/sentry-config/blob/m
 
 > `optional` **extra?**: `Record`\<`string`, `unknown`\>
 
-Defined in: [before-send.ts:52](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L52)
+Defined in: [before-send.ts:65](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L65)
 
 ##### fingerprint?
 
 > `optional` **fingerprint?**: `string`[]
 
-Defined in: [before-send.ts:39](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L39)
+Defined in: [before-send.ts:52](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L52)
 
 ##### logentry?
 
 > `optional` **logentry?**: `object`
 
-Defined in: [before-send.ts:40](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L40)
+Defined in: [before-send.ts:53](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L53)
 
 ###### message?
 
@@ -140,13 +178,13 @@ Defined in: [before-send.ts:40](https://github.com/groupe-j/sentry-config/blob/m
 
 > `optional` **message?**: `string`
 
-Defined in: [before-send.ts:38](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L38)
+Defined in: [before-send.ts:51](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L51)
 
 ##### request?
 
 > `optional` **request?**: `object`
 
-Defined in: [before-send.ts:43](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L43)
+Defined in: [before-send.ts:56](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L56)
 
 ###### cookies?
 
@@ -176,7 +214,7 @@ Defined in: [before-send.ts:43](https://github.com/groupe-j/sentry-config/blob/m
 
 > `optional` **spans?**: `object`[]
 
-Defined in: [before-send.ts:62](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L62)
+Defined in: [before-send.ts:75](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L75)
 
 ###### data?
 
@@ -190,19 +228,19 @@ Defined in: [before-send.ts:62](https://github.com/groupe-j/sentry-config/blob/m
 
 > `optional` **tags?**: `Record`\<`string`, `unknown`\>
 
-Defined in: [before-send.ts:42](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L42)
+Defined in: [before-send.ts:55](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L55)
 
 ##### transaction?
 
 > `optional` **transaction?**: `string`
 
-Defined in: [before-send.ts:41](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L41)
+Defined in: [before-send.ts:54](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L54)
 
 ***
 
 ### SentryLogLike
 
-Defined in: [before-send.ts:350](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L350)
+Defined in: [before-send.ts:403](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L403)
 
 @groupe-j/sentry-config — barrel export.
 
@@ -220,13 +258,13 @@ setSentryUser, isBot) for advanced use cases.
 
 > `optional` **attributes?**: `Record`\<`string`, `unknown`\>
 
-Defined in: [before-send.ts:352](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L352)
+Defined in: [before-send.ts:405](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L405)
 
 ##### message?
 
 > `optional` **message?**: `unknown`
 
-Defined in: [before-send.ts:351](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L351)
+Defined in: [before-send.ts:404](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L404)
 
 ***
 
@@ -538,6 +576,32 @@ Defined in: [trpc.ts:88](https://github.com/groupe-j/sentry-config/blob/main/src
 
 `unknown`
 
+***
+
+### UrlScrubContext
+
+Defined in: [scrub.ts:282](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L282)
+
+What the surroundings of a query say about it.
+
+#### Properties
+
+##### addressApi?
+
+> `optional` **addressApi?**: `boolean`
+
+Defined in: [scrub.ts:286](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L286)
+
+The URL is a geocoder's: its free-text parameters are addresses.
+
+##### trpc?
+
+> `optional` **trpc?**: `boolean`
+
+Defined in: [scrub.ts:284](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L284)
+
+The URL is a tRPC route: its `input` parameter is the procedure input.
+
 ## Type Aliases
 
 ### DeferFn
@@ -683,7 +747,7 @@ a reader the difference with a key-name redaction (`[REDACTED]`) at a glance.
 
 > `const` **SCRUB\_FAILED\_TAG**: `"pii_scrub_failed"` = `"pii_scrub_failed"`
 
-Defined in: [before-send.ts:129](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L129)
+Defined in: [before-send.ts:142](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L142)
 
 Tag set on an event whose scrubbing threw — see failClosed.
 
@@ -858,11 +922,39 @@ Defined in: [user.ts:33](https://github.com/groupe-j/sentry-config/blob/main/src
 
 ***
 
+### createSentryBeforeBreadcrumb()
+
+> **createSentryBeforeBreadcrumb**\<`B`\>(): (`breadcrumb`) => `B`
+
+Defined in: [before-send.ts:382](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L382)
+
+`beforeBreadcrumb`: the same scrubbing as the breadcrumbs of `beforeSend`,
+applied when the breadcrumb is RECORDED. `beforeSend` already cleans the
+breadcrumbs joined to an event; this hook keeps the raw ones (an outgoing
+call's `http.query`, a fetch `url`, a navigation `to`) out of the scope
+buffer, where anything else that reads it — an integration, an app's own
+`beforeSend` running before ours — would see them in clear.
+
+Fail-closed: a breadcrumb whose scrubbing throws keeps its type, category,
+level and timestamp, and loses its message and data.
+
+#### Type Parameters
+
+##### B
+
+`B` *extends* [`SentryBreadcrumbLike`](#sentrybreadcrumblike)
+
+#### Returns
+
+(`breadcrumb`) => `B`
+
+***
+
 ### createSentryBeforeSend()
 
 > **createSentryBeforeSend**\<`E`\>(`appName`): (`event`) => `E` \| `null`
 
-Defined in: [before-send.ts:304](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L304)
+Defined in: [before-send.ts:326](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L326)
 
 @groupe-j/sentry-config — barrel export.
 
@@ -896,7 +988,7 @@ setSentryUser, isBot) for advanced use cases.
 
 > **createSentryBeforeSendLog**\<`L`\>(): (`log`) => `L`
 
-Defined in: [before-send.ts:359](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L359)
+Defined in: [before-send.ts:412](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L412)
 
 `beforeSendLog`: `Sentry.logger.error(\`… ${err}\`)` puts the same ORM
 message in a log line, and its template parameters in `attributes`.
@@ -917,7 +1009,7 @@ message in a log line, and its template parameters in `attributes`.
 
 > **createSentryBeforeSendTransaction**\<`E`\>(): (`event`) => `E`
 
-Defined in: [before-send.ts:345](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L345)
+Defined in: [before-send.ts:367](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L367)
 
 `beforeSendTransaction` counterpart: a transaction carries the same request
 (`url` with `?token=…`), contexts and breadcrumbs as an error, plus span
@@ -1042,6 +1134,27 @@ Defined in: [bot.ts:12](https://github.com/groupe-j/sentry-config/blob/main/src/
 
 ***
 
+### isPositionName()
+
+> **isPositionName**(`name`): `boolean`
+
+Defined in: [scrub.ts:320](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L320)
+
+A key or parameter name that carries a position or an address in any
+context (`lat`, `geom`, `coordinates`, `point[lng]`…).
+
+#### Parameters
+
+##### name
+
+`string`
+
+#### Returns
+
+`boolean`
+
+***
+
 ### isSecretName()
 
 > **isSecretName**(`name`): `boolean`
@@ -1135,7 +1248,7 @@ Defined in: [redaction.ts:141](https://github.com/groupe-j/sentry-config/blob/ma
 
 > **scrubCookies**(`cookies`): `unknown`
 
-Defined in: [scrub.ts:516](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L516)
+Defined in: [scrub.ts:850](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L850)
 
 `event.request.cookies`: names are kept (they say which session was active),
 every value is dropped — a cookie value is a credential or tracking id.
@@ -1156,7 +1269,7 @@ every value is dropped — a cookie value is a credential or tracking id.
 
 > **scrubDeep**(`value`, `seen?`, `depth?`): `unknown`
 
-Defined in: [scrub.ts:352](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L352)
+Defined in: [scrub.ts:673](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L673)
 
 Key-name redaction AND value scrubbing, recursively. Returns new containers
 (never mutates). Cycles and pathological depth become `[REDACTED]`.
@@ -1201,17 +1314,23 @@ Defined in: [redaction.ts:300](https://github.com/groupe-j/sentry-config/blob/ma
 
 ### scrubQueryString()
 
-> **scrubQueryString**(`qs`): `unknown`
+> **scrubQueryString**(`qs`, `ctx?`): `unknown`
 
-Defined in: [scrub.ts:490](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L490)
+Defined in: [scrub.ts:818](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L818)
 
-`event.request.query_string`: string, `{ key: value | value[] }` or `[key, value][]`.
+`event.request.query_string`: string, `{ key: value | value[] }` or
+`[key, value][]`. `ctx`: what the request URL says about it (a tRPC route,
+a geocoder) — see [UrlScrubContext](#urlscrubcontext).
 
 #### Parameters
 
 ##### qs
 
 `unknown`
+
+##### ctx?
+
+[`UrlScrubContext`](#urlscrubcontext)
 
 #### Returns
 
@@ -1223,7 +1342,7 @@ Defined in: [scrub.ts:490](https://github.com/groupe-j/sentry-config/blob/main/s
 
 > **scrubRequestData**(`data`, `seen?`): `unknown`
 
-Defined in: [scrub.ts:465](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L465)
+Defined in: [scrub.ts:786](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L786)
 
 `event.request.data`: an object is walked; a JSON string is parsed, walked
 and re-serialised (so key-name redaction applies to it too); anything else —
@@ -1251,7 +1370,7 @@ the key list.
 
 > **scrubSentryEvent**\<`E`\>(`event`): `E`
 
-Defined in: [before-send.ts:332](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L332)
+Defined in: [before-send.ts:354](https://github.com/groupe-j/sentry-config/blob/main/src/before-send.ts#L354)
 
 The scrubbing of `beforeSend` without its app tag or its drop filters
 (browser extensions, non-browser runtimes) — for an app that keeps its own
@@ -1283,7 +1402,7 @@ Fails closed like the hooks (see [SCRUB\_FAILED\_TAG](#scrub_failed_tag)).
 
 > **scrubText**(`text`): `string`
 
-Defined in: [scrub.ts:301](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L301)
+Defined in: [scrub.ts:541](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L541)
 
 Scrub PII and credentials out of a free-text string, keeping the text around
 them. Returns the same string instance when nothing matched.
@@ -1293,6 +1412,59 @@ them. Returns the same string instance when nothing matched.
 ##### text
 
 `string`
+
+#### Returns
+
+`string`
+
+***
+
+### scrubUrl()
+
+> **scrubUrl**(`url`, `ctx?`): `string`
+
+Defined in: [scrub.ts:569](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L569)
+
+A field known to hold a URL (`request.url`, breadcrumb `url` / `from` / `to`,
+span `url.full`). Free-text scrubbing plus the position rules, with the
+context of `ctx` (the host of a sibling field). Fail-closed: a query that
+cannot be analysed is removed whole, fragment included — the path stays.
+
+#### Parameters
+
+##### url
+
+`string`
+
+##### ctx?
+
+[`UrlScrubContext`](#urlscrubcontext)
+
+#### Returns
+
+`string`
+
+***
+
+### scrubUrlQuery()
+
+> **scrubUrlQuery**(`query`, `ctx?`): `string`
+
+Defined in: [scrub.ts:585](https://github.com/groupe-j/sentry-config/blob/main/src/scrub.ts#L585)
+
+A query string on its own (`request.query_string`, breadcrumb `http.query`),
+with or without its `?`. Same rules and same fail-closed as [scrubUrl](#scruburl);
+`ctx` carries the host and path the query belongs to.
+
+#### Parameters
+
+##### query
+
+`string`
+
+##### ctx?
+
+[`UrlScrubContext`](#urlscrubcontext)
 
 #### Returns
 

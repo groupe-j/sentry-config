@@ -16,7 +16,11 @@
  */
 
 import * as Sentry from "@sentry/nextjs";
-import { createSentryBeforeSend, createSentryBeforeSendTransaction } from "./before-send.js";
+import {
+  createSentryBeforeBreadcrumb,
+  createSentryBeforeSend,
+  createSentryBeforeSendTransaction,
+} from "./before-send.js";
 import { DEFAULT_DENY_URLS, DEFAULT_IGNORED_ERRORS } from "./ignored.js";
 import {
   SENTRY_BROWSER_TRACES_SAMPLE_RATE,
@@ -257,6 +261,7 @@ export function initClientCore({ options, replay, eagerReplay }: InitClientCoreP
     ],
     beforeSend: createSentryBeforeSend(app),
     beforeSendTransaction: createSentryBeforeSendTransaction(),
+    beforeBreadcrumb: createSentryBeforeBreadcrumb(),
   });
 
   if (replayEnabled && !replayEager && isEnabled) {

@@ -188,7 +188,7 @@ function normaliseName(name: string): string {
  * `refresh_token`, `magicLink`, `X-Amz-Signature`, `X-Goog-Signature`…).
  */
 export function isSecretName(name: string): boolean {
-  if (isSensitive(name)) return true;
+  if (isSensitive(name) || isPositionName(name)) return true;
   const n = normaliseName(name);
   if (SECRET_PARAMS.has(n)) return true;
   // `hasCredentialSuffix` reçoit `n`, DÉJÀ normalisé par `normaliseName` —
@@ -211,6 +211,240 @@ export function isSecretParam(name: string, value: string): boolean {
     !ERROR_CODE_VALUE.test(value)
   );
 }
+
+// ─── Position ──────────────────────────────────────────────────────────────
+//
+// A visitor's plot, typed as an address and geocoded, travels as coordinates
+// in the query of every call made for it: `geom={"type":"Point",
+// "coordinates":[lng,lat]}` (apicarto IGN), `latlon=lng,lat` (Géorisques),
+// `lat=…&lon=…` (DVF), the tRPC `input={"0":{"json":{"lng":…,"lat":…}}}`, and
+// the page URL itself (`/recherche?lng=…&lat=…&label=12 rue …`). The SDK keeps
+// those queries in breadcrumbs (`http.query`, `url`, `from` / `to`) and in
+// `request.url` / `query_string`, and joins them to every capture.
+//
+// A coordinate is a number, so `scrubText` never sees it as PII, and the key
+// list matched none of these names. The rules below mask the VALUE and keep
+// the parameter name and the rest of the URL, which is what diagnoses a failed
+// upstream call.
+
+/** Parameters whose value is a position or a postal address, wherever they appear. */
+const POSITION_PARAMS = new Set([
+  "geom",
+  "latlon",
+  "latlng",
+  "lnglat",
+  "lonlat",
+  "lat",
+  "lng",
+  "lon",
+  "latitude",
+  "longitude",
+  "coordinates",
+  "coords",
+  // A viewport around the plot: a WMS / tRPC bounding box, its corners, and the
+  // WMTS tile of a high zoom (`TILEMATRIX=19&TILEROW=…&TILECOL=…` is ~50 m wide;
+  // the zoom level is kept).
+  "bbox",
+  "minlat",
+  "minlng",
+  "minlon",
+  "maxlat",
+  "maxlng",
+  "maxlon",
+  "tilerow",
+  "tilecol",
+  "adresse",
+  "address",
+]);
+
+/**
+ * Free text that names the place: the label of a geocoded address
+ * (`label=12 rue de Metz 57000 Metz`), the query typed into a geocoder. Too
+ * generic to mask everywhere (`?q=permis` on a blog search is a diagnostic), so
+ * only on an address API, or next to a position in the same query.
+ */
+const ADDRESS_TEXT_PARAMS = new Set(["q", "query", "text", "label"]);
+
+/** Geocoders: every free-text parameter sent to them is an address typed by a visitor. */
+const ADDRESS_API = /api-adresse\.data\.gouv\.fr|data\.geopf\.fr\/geocodage|nominatim\.openstreetmap\.org|photon\.komoot\.io/i;
+
+/** A tRPC HTTP route (`/api/trpc/router.proc?batch=1&input=…`). */
+const TRPC_PATH = /\/trpc\//i;
+
+/**
+ * tRPC sends a GET procedure's input as URL-encoded JSON (superjson too), and
+ * that input is whatever the form held. Recognised by its first character,
+ * raw or percent-encoded (once or twice).
+ */
+const JSON_VALUE = /^(?:[{[]|%(?:25){0,2}(?:7b|5b))/i;
+
+/** What the surroundings of a query say about it. */
+export interface UrlScrubContext {
+  /** The URL is a tRPC route: its `input` parameter is the procedure input. */
+  trpc?: boolean;
+  /** The URL is a geocoder's: its free-text parameters are addresses. */
+  addressApi?: boolean;
+}
+
+/** `ctx` widened by what `sources` (URLs, transaction names) say. */
+function urlContext(ctx: UrlScrubContext | undefined, ...sources: unknown[]): UrlScrubContext {
+  let trpc = ctx?.trpc === true;
+  let addressApi = ctx?.addressApi === true;
+  for (const s of sources) {
+    if (typeof s !== "string") continue;
+    trpc ||= TRPC_PATH.test(s);
+    addressApi ||= ADDRESS_API.test(s);
+  }
+  return { trpc, addressApi };
+}
+
+/** What `sources` (URLs, a transaction name) say about a query kept apart from them. */
+export function urlContextOf(...sources: unknown[]): UrlScrubContext {
+  return urlContext(undefined, ...sources);
+}
+
+/** Last segment of a parameter name, folded: `point[lat]`, `filter.lat` and `LAT` are all `lat`. */
+function paramLeaf(name: string): string {
+  const parts = name.split(/[.[\]]/);
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const part = parts[i];
+    if (part) return foldKey(part);
+  }
+  return "";
+}
+
+/**
+ * A key or parameter name that carries a position or an address in any
+ * context (`lat`, `geom`, `coordinates`, `point[lng]`…).
+ */
+export function isPositionName(name: string): boolean {
+  return POSITION_PARAMS.has(paramLeaf(name));
+}
+
+/**
+ * Nothing to hide, or already hidden. `startsWith`: a value is read up to its
+ * own end, and a marker that ends a JSON string (`lat=[redacted]"}`) runs on.
+ */
+function isEmptyOrMasked(value: string): boolean {
+  return value === "" || value.startsWith(REDACTED_VALUE) || value.startsWith(REDACTED);
+}
+
+/**
+ * Must the value of parameter `leaf` be masked? `hasPosition`: the same query
+ * carries a position parameter, which makes its free-text parameters an address.
+ */
+function masksPositionParam(leaf: string, value: string, ctx: UrlScrubContext, hasPosition: boolean): boolean {
+  if (isEmptyOrMasked(value)) return false;
+  if (POSITION_PARAMS.has(leaf)) return true;
+  if (leaf === "input") return ctx.trpc === true || JSON_VALUE.test(value);
+  if (ADDRESS_TEXT_PARAMS.has(leaf)) return ctx.addressApi === true || hasPosition;
+  return false;
+}
+
+/** URL-decode a parameter NAME (`+` is a space in a query). Throws on malformed percent-encoding. */
+function decodeParamName(raw: string): string {
+  return raw.includes("%") || raw.includes("+") ? decodeURIComponent(raw.replace(/\+/g, " ")) : raw;
+}
+
+/**
+ * `name=` in free text or in a URL. The value is NOT part of the pattern: its
+ * end depends on the name (see {@link positionValueEnd}), so the scan restarts
+ * right after `=` when the value is kept — a position parameter glued to it
+ * (`a=1,lat=48.8`) is still found.
+ */
+const PARAM_NAME = /(^|[?&#;,\s])([^\s=&?#;,"'`<>]{1,64})=/g;
+
+/**
+ * Where a position value ends. Wider than {@link PARAM_KV}, which stops at `,`
+ * and `"`: `geom={%22type%22:%22Point%22,%22coordinates%22:[2.35,48.85]}` (a
+ * URL normalised by WHATWG leaves `{`, `,` and `[` raw) and `adresse=12%20rue,
+ * %20Metz` would otherwise leave the tail in clear. A raw JSON value runs to
+ * the next parameter; anything else also stops at a quote or a backslash, the
+ * end of an enclosing string.
+ */
+function positionValueEnd(text: string, start: number, limit = 8192): number {
+  const json = text[start] === "{" || text[start] === "[";
+  const max = Math.min(text.length, start + limit);
+  let i = start;
+  for (; i < max; i++) {
+    const c = text.charCodeAt(i);
+    // & # whitespace
+    if (c === 38 || c === 35 || c === 32 || (c >= 9 && c <= 13)) break;
+    // " ' ` < > \
+    if (!json && (c === 34 || c === 39 || c === 96 || c === 60 || c === 62 || c === 92)) break;
+  }
+  return i;
+}
+
+/** Enough of a value to tell empty, `[redacted]` and a JSON start (`%25257B`) apart. */
+const VALUE_HEAD = 16;
+
+/**
+ * One pass of {@link scrubPositionText}: masks the parameters `decide` picks.
+ * Returns the text and whether a position parameter was seen.
+ */
+function maskParams(
+  text: string,
+  decide: (leaf: string, value: string) => boolean,
+): { out: string; sawPosition: boolean } {
+  let out = "";
+  let last = 0;
+  let sawPosition = false;
+  PARAM_NAME.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = PARAM_NAME.exec(text)) !== null) {
+    const valueStart = m.index + m[0].length;
+    // Decide on the head of the value only, and scan to its end only to mask:
+    // a kept value is scanned again from its start (the next `,lat=` may be
+    // inside), so scanning it whole here would be quadratic.
+    const value = text.slice(valueStart, positionValueEnd(text, valueStart, VALUE_HEAD));
+    let leaf: string | undefined;
+    try {
+      leaf = paramLeaf(decodeParamName(m[2] ?? ""));
+      // eslint-disable-next-line @groupe-j/no-error-swallow -- not swallowed: `leaf` stays undefined and the value is masked below.
+    } catch {
+      // Undecodable name: it could be any of them. Fail closed on the value.
+    }
+    if (leaf !== undefined && POSITION_PARAMS.has(leaf) && value !== "") sawPosition = true;
+    const mask = leaf === undefined ? !isEmptyOrMasked(value) : decide(leaf, value);
+    if (mask) {
+      const end = positionValueEnd(text, valueStart);
+      out += text.slice(last, valueStart) + REDACTED_VALUE;
+      last = end;
+      PARAM_NAME.lastIndex = end;
+    }
+  }
+  return { out: last === 0 ? text : out + text.slice(last), sawPosition };
+}
+
+/**
+ * Mask position, address and tRPC-input parameters in free text or a URL.
+ * `ctx` adds what the text cannot say itself (the host of an `http.query`).
+ */
+function scrubPositionText(text: string, given?: UrlScrubContext): string {
+  const ctx = urlContext(given, text);
+  // Two passes: an address label may come BEFORE the position that makes it one.
+  const first = maskParams(text, (leaf, value) => !ADDRESS_TEXT_PARAMS.has(leaf) && masksPositionParam(leaf, value, ctx, false));
+  if (!first.sawPosition && ctx.addressApi !== true) return first.out;
+  return maskParams(first.out, (leaf, value) => ADDRESS_TEXT_PARAMS.has(leaf) && masksPositionParam(leaf, value, ctx, true)).out;
+}
+
+/**
+ * `lat: 48.85`, `"lng":2.35` (a JSON dump, a logged object) — a coordinate as
+ * a NUMBER, which the quoted `key: "value"` pattern cannot see.
+ */
+const POSITION_NUMBER_KV = /\b((?:min|max)?(?:lat|lng|lon)|latitude|longitude)\b(\\?["']?\s{0,8}:\s{0,8})-?\d{1,3}(?:\.\d{1,20})?(?![\d.])/gi;
+
+/**
+ * `"coordinates":[2.35,48.85]`, GeoJSON rings included: a run of numbers and
+ * brackets. A digit must follow the opening brackets, so `[redacted]` is not
+ * matched again on the next pass (`beforeBreadcrumb`, then `beforeSend`).
+ */
+const POSITION_ARRAY_KV =
+  /\b(coordinates|coords|latlon|latlng|lnglat|lonlat)\b(\\?["']?\s{0,8}:\s{0,8})\[[\s[]{0,16}-?\d[-\d\s.,eE+[\]]{0,8192}/gi;
+
+/** Gate for the two patterns above. */
+const POSITION_KEY_HINT = /lat|lng|lon|coord/i;
 
 // ─── Text ──────────────────────────────────────────────────────────────────
 
@@ -250,7 +484,7 @@ function scrubParamValue(lead: string, name: string, value: string, match: strin
   return match;
 }
 
-function scrubTextAt(text: string, depth: number): string {
+function scrubTextAt(text: string, depth: number, ctx?: UrlScrubContext): string {
   if (text.length < 6) return text;
   let out = text;
 
@@ -265,6 +499,12 @@ function scrubTextAt(text: string, depth: number): string {
 
   const hasColon = out.includes(":");
   const hasEquals = out.includes("=");
+  // Before the quoted and `key=value` patterns: a position value runs past the
+  // `,` and `"` where they stop.
+  if (hasEquals) out = scrubPositionText(out, ctx);
+  if (hasColon && POSITION_KEY_HINT.test(out)) {
+    out = out.replace(POSITION_NUMBER_KV, `$1$2${REDACTED_VALUE}`).replace(POSITION_ARRAY_KV, `$1$2${REDACTED_VALUE}`);
+  }
   if ((hasColon || hasEquals) && (out.includes('"') || out.includes("'"))) {
     out = out.replace(QUOTED_KV, (match, q: string, key: string, sep: string, quoted: string) => {
       const inner = quoted.slice(1, -1);
@@ -302,6 +542,85 @@ export function scrubText(text: string): string {
   return scrubTextAt(text, 0);
 }
 
+/**
+ * Does any parameter NAME of this query fail to URL-decode? Then it cannot be
+ * told whether it is a position parameter, and {@link scrubUrl} drops the
+ * whole query rather than guess. Values are never decoded to decide, so a
+ * malformed value (`?lat=%E0%A4%A`) is masked like any other.
+ */
+function hasUndecodableName(query: string): boolean {
+  for (const pair of query.split("&")) {
+    const eq = pair.indexOf("=");
+    try {
+      decodeParamName(eq === -1 ? pair : pair.slice(0, eq));
+    } catch {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * A field known to hold a URL (`request.url`, breadcrumb `url` / `from` / `to`,
+ * span `url.full`). Free-text scrubbing plus the position rules, with the
+ * context of `ctx` (the host of a sibling field). Fail-closed: a query that
+ * cannot be analysed is removed whole, fragment included — the path stays.
+ */
+export function scrubUrl(url: string, ctx?: UrlScrubContext): string {
+  const q = url.indexOf("?");
+  if (q !== -1) {
+    const hash = url.indexOf("#", q);
+    if (hasUndecodableName(url.slice(q + 1, hash === -1 ? undefined : hash))) {
+      return `${scrubTextAt(url.slice(0, q), 0, urlContext(ctx, url))}?${REDACTED_VALUE}`;
+    }
+  }
+  return scrubTextAt(url, 0, urlContext(ctx, url));
+}
+
+/**
+ * A query string on its own (`request.query_string`, breadcrumb `http.query`),
+ * with or without its `?`. Same rules and same fail-closed as {@link scrubUrl};
+ * `ctx` carries the host and path the query belongs to.
+ */
+export function scrubUrlQuery(query: string, ctx?: UrlScrubContext): string {
+  const body = query.startsWith("?") ? query.slice(1) : query;
+  const hash = body.indexOf("#");
+  if (hasUndecodableName(hash === -1 ? body : body.slice(0, hash))) {
+    return query.startsWith("?") ? `?${REDACTED_VALUE}` : REDACTED_VALUE;
+  }
+  // Leading `?` or not, `PARAM_NAME` anchors on `^` / `&`, so the first
+  // parameter is found either way.
+  return scrubTextAt(query, 0, ctx);
+}
+
+/** Keys of breadcrumb and span data that hold a full URL or a path. */
+const URL_FIELDS = ["url", "from", "to", "http.url", "url.full"] as const;
+/** Keys that hold the query of a sibling URL field, kept apart by the SDK. */
+const QUERY_FIELDS = ["http.query", "url.query"] as const;
+
+/**
+ * Breadcrumb `data` / span `data`: URL fields go through {@link scrubUrl}, and
+ * the query the SDK splits off the URL (`http.query`: `{ url:
+ * "https://apicarto.ign.fr/api/gpu/zone-urba", "http.query": "?geom=…" }`)
+ * through {@link scrubUrlQuery} with the context of that URL — the host is
+ * what makes `q` an address. Shallow copy; the caller then runs
+ * {@link scrubDeep} over the result, which leaves masked values as they are.
+ */
+export function scrubUrlFields(data: unknown): unknown {
+  if (!isPlainObject(data)) return data;
+  const ctx = urlContext(undefined, ...URL_FIELDS.map((k) => data[k]));
+  const next: Record<string, unknown> = { ...data };
+  for (const k of URL_FIELDS) {
+    const v = data[k];
+    if (typeof v === "string") next[k] = scrubUrl(v, ctx);
+  }
+  for (const k of QUERY_FIELDS) {
+    const v = data[k];
+    if (typeof v === "string") next[k] = scrubUrlQuery(v, ctx);
+  }
+  return next;
+}
+
 // ─── Structures ────────────────────────────────────────────────────────────
 
 /**
@@ -330,7 +649,9 @@ export const IP_KEY =
   /^(?:x-(?:original-)?forwarded-for|x-real-ip|forwarded|cf-connecting-ip|true-client-ip|x-client-ip|x-cluster-client-ip|fastly-client-ip|x-vercel-forwarded-for|x-vercel-proxied-for|x-vercel-ip-.+|cf-ipcity|cf-iplatitude|cf-iplongitude|client\.address|user\.ip_address|ip_address)$/i;
 
 function isCredentialKey(key: string): boolean {
-  if (isSensitive(key)) return true;
+  // A position is a number or an array (`{ lat: 48.85 }`, a tRPC input in
+  // `contexts.trpc`): only a key rule reaches it.
+  if (isSensitive(key) || isPositionName(key)) return true;
   const lower = key.toLowerCase();
   if (CREDENTIAL_HEADER_KEYS.has(lower) || IP_KEY.test(lower)) return true;
   // Log / span attributes: `user.email`, `user.name`, `user.username` (only
@@ -479,30 +800,43 @@ export function scrubRequestData(data: unknown, seen = new WeakSet<object>()): u
   return scrubText(data);
 }
 
-function scrubQueryValue(key: string, v: unknown): unknown {
-  if (typeof v === "string") return isSecretParam(key, v) ? REDACTED_VALUE : scrubText(v);
+function scrubQueryValue(key: string, v: unknown, mask: (leaf: string, value: string) => boolean): unknown {
+  if (typeof v === "string") {
+    return isSecretParam(key, v) || mask(paramLeaf(key), v) ? REDACTED_VALUE : scrubText(v);
+  }
   // `?token=a&token=b` parses to `{ token: ["a", "b"] }`.
-  if (Array.isArray(v)) return v.map((item) => scrubQueryValue(key, item));
+  if (Array.isArray(v)) return v.map((item) => scrubQueryValue(key, item, mask));
+  if (v !== null && typeof v === "object" && isPositionName(key)) return REDACTED;
   return scrubDeep(v);
 }
 
-/** `event.request.query_string`: string, `{ key: value | value[] }` or `[key, value][]`. */
-export function scrubQueryString(qs: unknown): unknown {
+/**
+ * `event.request.query_string`: string, `{ key: value | value[] }` or
+ * `[key, value][]`. `ctx`: what the request URL says about it (a tRPC route,
+ * a geocoder) — see {@link UrlScrubContext}.
+ */
+export function scrubQueryString(qs: unknown, ctx?: UrlScrubContext): unknown {
   if (typeof qs === "string") {
     // PARAM_KV anchors on `^`/`&`, so a bare `token=…&x=1` is covered.
-    return scrubText(qs);
+    return scrubUrlQuery(qs, ctx);
   }
+  const context = urlContext(ctx);
   if (Array.isArray(qs)) {
+    const hasPosition = qs.some((pair) => Array.isArray(pair) && typeof pair[0] === "string" && isPositionName(pair[0]));
+    const mask = (leaf: string, value: string): boolean => masksPositionParam(leaf, value, context, hasPosition);
     return qs.map((pair) => {
       if (!Array.isArray(pair) || typeof pair[0] !== "string") return scrubDeep(pair);
       const [k, v] = pair as [string, unknown];
-      return [k, scrubQueryValue(k, v)];
+      return [k, scrubQueryValue(k, v, mask)];
     });
   }
   if (qs !== null && typeof qs === "object") {
+    const entries = Object.entries(qs as Record<string, unknown>);
+    const hasPosition = entries.some(([k]) => isPositionName(k));
+    const mask = (leaf: string, value: string): boolean => masksPositionParam(leaf, value, context, hasPosition);
     const result: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(qs as Record<string, unknown>)) {
-      result[k] = scrubQueryValue(k, v);
+    for (const [k, v] of entries) {
+      result[k] = scrubQueryValue(k, v, mask);
     }
     return result;
   }

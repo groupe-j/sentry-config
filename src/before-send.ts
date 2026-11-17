@@ -16,6 +16,9 @@ import {
   scrubQueryString,
   scrubRequestData,
   scrubText,
+  scrubUrl,
+  scrubUrlFields,
+  urlContextOf,
 } from "./scrub.js";
 
 interface StackFrameLike {
@@ -30,6 +33,16 @@ interface StackFrameLike {
   context_line?: string;
   pre_context?: string[];
   post_context?: string[];
+}
+
+/** Loose Sentry breadcrumb shape (`beforeBreadcrumb`, `event.breadcrumbs`). */
+export interface SentryBreadcrumbLike {
+  type?: string;
+  category?: string;
+  level?: string;
+  message?: string;
+  data?: unknown;
+  timestamp?: number;
 }
 
 // Loose Sentry event shape — typed locally to keep this package
@@ -48,7 +61,7 @@ export interface SentryEventLike {
     cookies?: unknown;
     headers?: Record<string, string>;
   };
-  breadcrumbs?: { message?: string; data?: unknown }[];
+  breadcrumbs?: SentryBreadcrumbLike[];
   extra?: Record<string, unknown>;
   contexts?: Record<string, unknown>;
   exception?: {
@@ -163,6 +176,18 @@ function scrubTags(tags: Record<string, unknown>): Record<string, unknown> {
 }
 
 /**
+ * A breadcrumb: its message, and its data with the URL fields read as URLs
+ * (`http.query` with the host of `url`, see `scrubUrlFields`).
+ */
+function scrubBreadcrumb<B extends SentryBreadcrumbLike>(b: B, seen: WeakSet<object>): B {
+  return {
+    ...b,
+    message: typeof b.message === "string" ? scrubText(b.message) : b.message,
+    data: b.data === undefined ? undefined : scrubDeep(scrubUrlFields(b.data), seen),
+  };
+}
+
+/**
  * Every free-text and structured field of an event (error or transaction)
  * that can carry PII. Fields absent from the input stay absent.
  */
@@ -192,12 +217,15 @@ function scrubEvent<E extends SentryEventLike>(event: E): E {
 
   if (event.request) {
     const r = event.request;
+    // The query string is kept apart from its URL: the URL (and the route in
+    // the transaction name) says whether `input` is a tRPC input.
+    const ctx = urlContextOf(r.url, event.transaction);
     next.request = {
       ...r,
-      url: typeof r.url === "string" ? scrubText(r.url) : r.url,
+      url: typeof r.url === "string" ? scrubUrl(r.url) : r.url,
       env: r.env === undefined ? undefined : (scrubDeep(r.env, seen) as Record<string, unknown>),
       data: r.data === undefined ? undefined : scrubRequestData(r.data, seen),
-      query_string: r.query_string === undefined ? undefined : scrubQueryString(r.query_string),
+      query_string: r.query_string === undefined ? undefined : scrubQueryString(r.query_string, ctx),
       cookies: r.cookies === undefined ? undefined : scrubCookies(r.cookies),
       headers: r.headers ? scrubHeaderValues(r.headers) : undefined,
     };
@@ -221,13 +249,7 @@ function scrubEvent<E extends SentryEventLike>(event: E): E {
     };
   }
 
-  if (event.breadcrumbs) {
-    next.breadcrumbs = event.breadcrumbs.map((b) => ({
-      ...b,
-      message: typeof b.message === "string" ? scrubText(b.message) : b.message,
-      data: b.data === undefined ? undefined : scrubDeep(b.data, seen),
-    }));
-  }
+  if (event.breadcrumbs) next.breadcrumbs = event.breadcrumbs.map((b) => scrubBreadcrumb(b, seen));
 
   if (event.extra) next.extra = scrubDeep(event.extra, seen) as Record<string, unknown>;
   if (event.contexts) next.contexts = scrubContexts(event.contexts, seen) as Record<string, unknown>;
@@ -236,7 +258,7 @@ function scrubEvent<E extends SentryEventLike>(event: E): E {
     next.spans = event.spans.map((s) => ({
       ...s,
       description: typeof s.description === "string" ? scrubText(s.description) : s.description,
-      data: s.data === undefined ? undefined : scrubDeep(s.data, seen),
+      data: s.data === undefined ? undefined : scrubDeep(scrubUrlFields(s.data), seen),
     }));
   }
 
@@ -344,6 +366,37 @@ export function scrubSentryEvent<E extends SentryEventLike>(event: E): E {
  */
 export function createSentryBeforeSendTransaction<E extends SentryEventLike>(): (event: E) => E {
   return (event: E): E => scrubSentryEvent(event);
+}
+
+/**
+ * `beforeBreadcrumb`: the same scrubbing as the breadcrumbs of `beforeSend`,
+ * applied when the breadcrumb is RECORDED. `beforeSend` already cleans the
+ * breadcrumbs joined to an event; this hook keeps the raw ones (an outgoing
+ * call's `http.query`, a fetch `url`, a navigation `to`) out of the scope
+ * buffer, where anything else that reads it — an integration, an app's own
+ * `beforeSend` running before ours — would see them in clear.
+ *
+ * Fail-closed: a breadcrumb whose scrubbing throws keeps its type, category,
+ * level and timestamp, and loses its message and data.
+ */
+export function createSentryBeforeBreadcrumb<B extends SentryBreadcrumbLike>(): (breadcrumb: B) => B {
+  return (breadcrumb: B): B => {
+    try {
+      return scrubBreadcrumb(breadcrumb, new WeakSet<object>());
+    } catch {
+      const kept: SentryBreadcrumbLike = { message: REDACTED_VALUE };
+      for (const key of ["type", "category", "level", "timestamp"] as const) {
+        try {
+          const v = breadcrumb[key];
+          if (v !== undefined) (kept as Record<string, unknown>)[key] = v;
+          // eslint-disable-next-line @groupe-j/no-error-swallow -- this IS the error path: an unreadable field is left out so the breadcrumb still records.
+        } catch {
+          // Unreadable field: leave it out.
+        }
+      }
+      return kept as B;
+    }
+  };
 }
 
 // Loose Sentry log shape (`beforeSendLog`).

@@ -5,7 +5,48 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- **La position d'un visiteur ne part plus dans Sentry.** Les coordonnées du
+  terrain cherché (l'adresse d'un particulier) partaient en clair dans les
+  breadcrumbs d'appels sortants du SDK Node (`http.query` :
+  `?geom={"type":"Point","coordinates":[lng,lat]}`, `?latlon=…`, `?lat=…&lon=…`),
+  dans `request.url` / `request.query_string` d'un appel tRPC
+  (`input={"0":{"json":{"lng":…,"lat":…}}}`), dans les breadcrumbs `fetch` /
+  `xhr` / `navigation` du navigateur (`/recherche?lng=…&lat=…&label=12 rue…`)
+  et dans `contexts.trpc`. Une coordonnée est un nombre : ni le scrubbing de
+  texte ni la liste de clés ne la voyaient.
+
+  Désormais la **valeur** devient `[redacted]`, le nom du paramètre et le reste
+  de l'URL restent :
+  - `geom`, `lat`, `lng`, `lon`, `latlon`, `latlng`, `lnglat`, `lonlat`,
+    `latitude`, `longitude`, `coordinates`, `coords`, `adresse`, `address`, et
+    l'emprise de la carte autour du terrain (`bbox`, `minLat`…`maxLng`, la tuile
+    WMTS `TILEROW` / `TILECOL` — le niveau de zoom reste) — partout : URL, texte libre (une valeur JSON brute est lue jusqu'au
+    paramètre suivant, au-delà des `,` qu'une URL normalisée laisse), et comme
+    **clé d'objet** (`{ lat: 49.11 }` dans `extra`, `contexts`, un corps de
+    mutation) ; `"lat": 49.11` et `"coordinates": [[…]]` dans un texte aussi ;
+  - `q`, `query`, `text`, `label` sur un géocodeur (`api-adresse.data.gouv.fr`,
+    `data.geopf.fr/geocodage`, Nominatim, Photon) — l'hôte est lu dans `url`
+    quand le SDK range la requête à part dans `http.query` — ou à côté d'une
+    position dans la même requête ;
+  - `input` sur une URL `/trpc/` (`request.query_string` prend le contexte de
+    `request.url` et du nom de transaction), ou dès qu'il porte du JSON.
+
+  Fail-closed : une URL dont un **nom** de paramètre ne se décode pas perd
+  toute sa requête (le chemin reste) ; les valeurs ne sont jamais décodées pour
+  décider, une valeur malformée est donc masquée comme une autre.
+
 ### Added
+
+- **`createSentryBeforeBreadcrumb`**, branché par `initSentryClient`,
+  `initSentryServer` et `initSentryEdge` : le même scrubbing que les
+  breadcrumbs de `beforeSend`, appliqué à l'enregistrement, pour que le tampon
+  de la portée ne garde pas la requête brute. Fail-closed : un breadcrumb dont
+  le scrubbing lève garde son type, sa catégorie, son niveau et son horodatage,
+  et perd message et données. Exporté aussi par `/client`.
+- `scrubUrl`, `scrubUrlQuery`, `isPositionName` et le type `UrlScrubContext`
+  dans le barrel.
 
 - **`createSentryBeforeSend` jette les événements d'un runtime JS non-navigateur
   déguisé en Chrome.** Un événement dont une frame (`filename` ou `abs_path`)

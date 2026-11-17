@@ -290,6 +290,7 @@ describe("/client — eager entry point (unchanged behaviour)", () => {
     expect(o.ignoreErrors).toContain("MyCustomNoise");
     expect(typeof o.tracesSampler).toBe("function");
     expect(typeof o.beforeSend).toBe("function");
+    expect(typeof o.beforeBreadcrumb).toBe("function");
   });
 
   it("honours the enabled gate and never schedules a lazy attach when off", async () => {

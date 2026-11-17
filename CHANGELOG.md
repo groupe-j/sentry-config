@@ -5,7 +5,106 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- **La position d'un visiteur ne part plus dans les événements ni dans les
+  breadcrumbs Sentry** — mais toujours dans les enregistrements **Session
+  Replay** (URL de page et de ressources), que rien ici ne branche par défaut :
+  voir `createReplayBeforeAddRecordingEvent` plus bas, et à couvrir côté app ;
+  l'URL de la page enregistrée n'est atteignable par aucun hook du paquet.
+
+  Les coordonnées du terrain cherché (l'adresse d'un particulier) partaient en
+  clair dans les breadcrumbs d'appels sortants du SDK Node (`http.query` :
+  `?geom={"type":"Point","coordinates":[lng,lat]}`, `?latlon=…`, `?lat=…&lon=…`),
+  dans `request.url` / `request.query_string` d'un appel tRPC
+  (`input={"0":{"json":{"lng":…,"lat":…}}}`), dans les breadcrumbs `fetch` /
+  `xhr` / `navigation` du navigateur (`/recherche?lng=…&lat=…&label=12 rue…`)
+  et dans `contexts.trpc`. Une coordonnée est un nombre : ni le scrubbing de
+  texte ni la liste de clés ne la voyaient.
+
+  Désormais la **valeur** devient `[redacted]`, le nom du paramètre et le reste
+  de l'URL restent :
+  - `geom`, `lat`, `lng`, `lon`, `latlon`, `latlng`, `lnglat`, `lonlat`,
+    `latitude`, `longitude`, `coordinates`, `coords`, `center` (MapLibre),
+    `adresse`, `address`, et l'emprise de la carte autour du terrain (`bbox`,
+    `minLat`…`maxLng`, la tuile WMTS `TILEROW` / `TILECOL` — le zoom reste) —
+    partout : URL, texte libre, et comme **clé d'objet** (`{ lat: 49.11 }` dans
+    `extra`, `contexts`, un corps de mutation) ; `"lat": 49.11` et
+    `"coordinates": [[…]]` dans un texte aussi ;
+  - par la forme de leur valeur : `position`, `point`, `points` quand ils
+    portent un objet ou un tableau (`position: { lat, lng }`, `points: [[x, y]]` —
+    `point: 3` reste), `path` / `polyline` quand ils portent un tableau de paires
+    de nombres (`path: "dossier.suggest"` reste) ;
+  - `q`, `query`, `text`, `label`, `ll`, `point` sur un géocodeur ou une API
+    de carte (`api-adresse.data.gouv.fr`, `data.geopf.fr`, `wxs.ign.fr`,
+    OpenStreetMap/Nominatim, Photon, Google Maps, Mapbox, MapTiler) — l'hôte est
+    lu dans `url` quand le SDK range la requête à part dans `http.query` — ou à
+    côté d'une position dans la même requête, le même objet ou le même dump
+    JSON (une suggestion de géocodeur `{ label, lat, lng }`) ;
+  - **entrée d'une procédure** — `input` tRPC d'un GET (URL `/trpc/`, ou tout
+    `input` qui porte du JSON), corps d'un POST vers une route `/trpc/`,
+    `contexts.trpc.input` (là où le `trpcMiddleware` du SDK la range, avec
+    `attachRpcInput` — défaut de `createSentryTrpcMiddleware`), `extra.input` /
+    `extra.rawInput` : **décodée** (une ou deux fois), parcourue par le
+    scrubbing en profondeur, **ré-encodée**. Ses champs de texte libre — `q`,
+    `query`, `search`, `term`, `keyword`, `text`, `label`, `adresse`,
+    `address`, `street`, `rue` (chaîne, ou chaque chaîne d'une liste) — sont
+    masqués **toujours**, position voisine ou non : la recherche
+    d'adresse (`dossier.suggest` → `{ q: "12 rue de la Paix" }`) n'a pas de
+    position pour la trahir. Identifiants et champs structurés (`id`, `slug`,
+    `insee`, `page`, `limit`, enums) restent lisibles, batch compris.
+    Illisible, non JSON, plus de 64 Ko, ou chaîne nue (la procédure prend le
+    texte tapé lui-même) : masquée en bloc ;
+  - tuiles de carte `/{z}/{x}/{y}.png|pbf` et hash de carte `#17/49.11/6.17` :
+    seul le zoom reste.
+
+  Dans une URL, une valeur court jusqu'au `&` suivant : une adresse non encodée
+  (`?q=12 rue de Metz&limit=5`, que `fetch` accepte) est masquée en entier, et
+  pas seulement jusqu'à la première espace ; une valeur JSON brute court jusqu'à
+  son crochet fermant. `server.address` et les autres attributs OTel pointés
+  restent lisibles.
+
+  Fail-closed : une URL dont un **nom** de paramètre ne se décode pas perd
+  toute sa requête (le chemin reste) ; les valeurs ne sont jamais décodées pour
+  décider, une valeur malformée est donc masquée comme une autre.
+
+### Changed
+
+- **`isSecretName` renvoie maintenant `true` pour les clés de position**
+  (`lat`, `geom`, `coordinates`, `center`, `bbox`… — voir `isPositionName`).
+  Un appelant qui s'en sert pour décider d'un masquage masquera donc aussi
+  ces clés.
+
 ### Added
+
+- **`createSentryBeforeBreadcrumb`**, branché par `initSentryClient`,
+  `initSentryServer` et `initSentryEdge` : le scrubbing des URL, du message et
+  du premier niveau de `data` (chaînes des `arguments` de `console` comprises),
+  appliqué à l'enregistrement, pour que le tampon de la portée ne garde pas la
+  requête brute. Les objets imbriqués restent à `beforeSend` (normalisés par le
+  SDK) : les parcourir ici coûterait chaque `console.log` sur le fil principal.
+  Fail-closed : un breadcrumb dont le scrubbing lève garde son type, sa
+  catégorie, son niveau et son horodatage, et perd message et données. Exporté
+  aussi par `/client` et `/client-lazy`.
+- **`createReplayBeforeAddRecordingEvent`** (optionnel, **non branché** par
+  défaut) : `beforeAddRecordingEvent` pour `replayIntegration`. Le SDK (10.76,
+  `maybeApplyCallback`) ne l'appelle **que sur les événements Custom** : il
+  scrubbe donc les frames breadcrumb et `performanceSpan` d'un enregistrement —
+  `description` (URL de chaque requête `resource.fetch`, de chaque
+  `navigation.push`), `message`, `data`. Il n'atteint **ni l'URL de la page**
+  (événement meta rrweb), **ni le DOM** (laissé à `maskAllText` /
+  `blockAllMedia`). Assignable à `beforeAddRecordingEvent` sans cast (rappel
+  générique). Fail-closed : un événement qui ne se scrubbe pas est abandonné.
+  Exporté par `/client`, `/client-lazy` et le barrel.
+
+  **Replay reste à couvrir côté app** : `maskAllText` (défaut du paquet),
+  `networkDetailAllowUrls` sans les routes qui portent une position (les corps
+  et en-têtes n'y sont capturés que pour ces URL), ce
+  `beforeAddRecordingEvent` passé à `replayIntegration`, et **l'URL de la
+  page** autrement : ne pas mettre la position dans l'URL côté app (état en
+  mémoire plutôt que `?lng=…&lat=…`), ou ne pas enregistrer Replay sur ces pages.
+- `scrubUrl`, `scrubUrlQuery`, `scrubProcedureInput`, `isPositionName` et les types
+  `UrlScrubContext` / `ReplayRecordingEventLike` dans le barrel.
 
 - **`createSentryBeforeSend` jette les événements d'un runtime JS non-navigateur
   déguisé en Chrome.** Un événement dont une frame (`filename` ou `abs_path`)

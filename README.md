@@ -7,7 +7,7 @@ Shared Sentry configuration with battle-tested PII redaction. Extracted from `ri
 ## What this gives you
 
 - **PII redaction** by key-name (predictable, visible as `[REDACTED]`) — handles passport, idCard, nationalId, addresses, emails, payment data
-- **PII scrubbing inside free text** — exception messages (Drizzle `params:`, Postgres `Key (…)=(…)`, Prisma argument dumps), JSON-string request bodies, `request.url` / `query_string` / cookies, breadcrumb messages, span descriptions and log lines: the **value** becomes `[redacted]`, the SQL and the diagnosis stay. Wired into `beforeSend`, `beforeSendTransaction` and `beforeSendLog` by the init helpers; fails closed (minimal event tagged `pii_scrub_failed`) if scrubbing throws
+- **PII scrubbing inside free text** — exception messages (Drizzle `params:`, Postgres `Key (…)=(…)`, Prisma argument dumps), JSON-string request bodies, `request.url` / `query_string` / cookies, breadcrumb messages and URLs, span descriptions and log lines, and a visitor's **position** in any query (`geom`, `lat`/`lng`, tRPC `input`, geocoder `q`): the **value** becomes `[redacted]`, the SQL and the diagnosis stay. Wired into `beforeSend`, `beforeSendTransaction`, `beforeSendLog` and `beforeBreadcrumb` by the init helpers; fails closed (minimal event tagged `pii_scrub_failed`) if scrubbing throws
 - **Header scrubbing** for webhook signatures (Stripe, Knock, Telegram, Sanity, Vercel)
 - **Multi-tenant app tagging** via `beforeSend` for cross-app dashboards
 - **Smart sampling**: 10% prod / 100% dev / 0% test, with health endpoint and static assets excluded
@@ -618,11 +618,51 @@ helpers therefore also install value-level scrubbing (`src/scrub.ts`):
 | Prisma dump | `email: "jean@x.fr", role: "MEMBER"` | `email: "[redacted]", role: "MEMBER"` |
 | `request.url` | `/api/auth/magic-link/verify?token=Zk3p…&callbackURL=%2F` | `…?token=[redacted]&callbackURL=%2F` |
 | `request.data` (JSON string) | `{"email":"jean@x.fr","callbackURL":"/"}` | `{"email":"[REDACTED]","callbackURL":"/"}` |
+| Outgoing-call breadcrumb (`http.query`) | `?geom={"type":"Point","coordinates":[6.17,49.11]}&_limit=1` | `?geom=[redacted]&_limit=1` |
+| tRPC GET (`request.url`, `query_string`, fetch breadcrumb) | `/api/trpc/carte.parcelles?batch=1&input=%7B%220%22…` | `…?batch=1&input=[redacted]` |
+| Page URL, navigation `from` / `to` | `/recherche?lng=6.17&lat=49.11&label=12%20rue…&insee=57463` | `/recherche?lng=[redacted]&lat=[redacted]&label=[redacted]&insee=57463` |
 
-If you call `Sentry.init` yourself rather than the helpers, wire all three:
+**Positions and addresses in URLs.** A visitor's coordinates are the address
+of a private person, and they travel as numbers no text pattern sees. The hooks
+mask the **value** of `geom`, `lat`, `lng`, `lon`, `latlon`, `latitude`,
+`longitude`, `coordinates`, `coords`, `center`, `adresse`, `address` — and of the map
+viewport around the plot: `bbox`, `minLat`…`maxLng`, WMTS `TILEROW` / `TILECOL` — wherever they
+appear (URLs, free text, and as object keys — a `{ lat: 49.11 }` in `extra` or
+in the tRPC input of `contexts.trpc`); `q` / `query` / `text` / `label` / `ll` /
+`point` on a geocoder or map API (`api-adresse.data.gouv.fr`, `data.geopf.fr`,
+OpenStreetMap/Nominatim, Photon, Google Maps, Mapbox…) or next to a position in
+the same query; `position` / `point` / `points` holding an object or array and
+`path` / `polyline` holding coordinate pairs. A **procedure input** (tRPC
+`input` of a GET, body of a POST to `/trpc/`, `contexts.trpc.input` set by the
+SDK's `trpcMiddleware`, `extra.input` / `extra.rawInput`) is decoded, scrubbed
+and re-encoded: its free-text fields (`q`, `query`, `search`, `term`,
+`keyword`, `text`, `label`, `adresse`, `address`, `street`, `rue`) are ALWAYS
+masked — an address search has no position to give it away — while ids and
+structured fields stay readable (masked whole if unreadable). The parameter name and the rest of the URL stay. A
+URL whose parameter names cannot be decoded loses its whole query (fail-closed).
+In a URL a value runs to the next `&` (an unencoded `?q=12 rue de Metz&…` is
+masked whole); `label` / `q` / `text` next to `lat` / `lng` in an object or a
+JSON dump are masked too; slippy-map tiles (`/19/{x}/{y}.png`) and the map hash
+(`#17/49.11/6.17`) keep only their zoom. Not covered: an address in a URL
+**path** (a geocoder that takes it there).
+
+**Session Replay is not covered by default** — recordings (page URL, resource
+URLs) go through none of these hooks. Cover it in the app: keep `maskAllText`,
+leave routes that carry a position out of `networkDetailAllowUrls`, and pass
+the optional `createReplayBeforeAddRecordingEvent()` (exported by `/client` and
+`/client-lazy`) as `replayIntegration({ beforeAddRecordingEvent })`. The SDK
+calls that hook on **custom** events only (breadcrumb and `performanceSpan`
+frames: request and navigation URLs) — it never sees the **page URL** of the
+recording. Keep a position out of the page URL in the app, or do not record
+Replay on those pages.
+`beforeBreadcrumb` (`createSentryBeforeBreadcrumb`) applies the same scrubbing
+when a breadcrumb is recorded.
+
+If you call `Sentry.init` yourself rather than the helpers, wire all four:
 
 ```ts
 import {
+  createSentryBeforeBreadcrumb,
   createSentryBeforeSend,
   createSentryBeforeSendTransaction,
   createSentryBeforeSendLog,
@@ -632,6 +672,7 @@ Sentry.init({
   beforeSend: createSentryBeforeSend('my-app'),
   beforeSendTransaction: createSentryBeforeSendTransaction(),
   beforeSendLog: createSentryBeforeSendLog(),
+  beforeBreadcrumb: createSentryBeforeBreadcrumb(),
 });
 ```
 

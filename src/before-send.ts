@@ -16,6 +16,11 @@ import {
   scrubQueryString,
   scrubRequestData,
   scrubText,
+  scrubUrl,
+  scrubProcedureInput,
+  scrubRecordedBreadcrumbData,
+  scrubUrlFields,
+  urlContextOf,
 } from "./scrub.js";
 
 interface StackFrameLike {
@@ -30,6 +35,16 @@ interface StackFrameLike {
   context_line?: string;
   pre_context?: string[];
   post_context?: string[];
+}
+
+/** Loose Sentry breadcrumb shape (`beforeBreadcrumb`, `event.breadcrumbs`). */
+export interface SentryBreadcrumbLike {
+  type?: string;
+  category?: string;
+  level?: string;
+  message?: string;
+  data?: unknown;
+  timestamp?: number;
 }
 
 // Loose Sentry event shape — typed locally to keep this package
@@ -48,7 +63,7 @@ export interface SentryEventLike {
     cookies?: unknown;
     headers?: Record<string, string>;
   };
-  breadcrumbs?: { message?: string; data?: unknown }[];
+  breadcrumbs?: SentryBreadcrumbLike[];
   extra?: Record<string, unknown>;
   contexts?: Record<string, unknown>;
   exception?: {
@@ -163,6 +178,46 @@ function scrubTags(tags: Record<string, unknown>): Record<string, unknown> {
 }
 
 /**
+ * Before the generic walk: the root span's data (`contexts.trace.data`) holds
+ * the same URL fields as a span's, and `contexts.trpc.input` is a procedure
+ * input — the SDK's `trpcMiddleware` puts it there (`@sentry/core` 10.76
+ * `trpc.js`) when `attachRpcInput` is on, the default of
+ * `createSentryTrpcMiddleware`. `procedure_input` is read too, for an app
+ * that set the context by hand under that name.
+ */
+function withTraceUrlFields(contexts: Record<string, unknown>): Record<string, unknown> {
+  let next = contexts;
+  const trace = contexts.trace as { data?: unknown } | undefined;
+  if (trace && typeof trace === "object" && trace.data !== undefined) {
+    next = { ...next, trace: { ...trace, data: scrubUrlFields(trace.data) } };
+  }
+  const trpc = contexts.trpc as Record<string, unknown> | undefined;
+  if (trpc && typeof trpc === "object") next = { ...next, trpc: withProcedureInputs(trpc, ["input", "procedure_input"]) };
+  return next;
+}
+
+/** `holder` with each of `keys` read as a procedure input (`scrubProcedureInput`). */
+function withProcedureInputs(holder: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
+  let next = holder;
+  for (const key of keys) {
+    if (holder[key] !== undefined) next = { ...next, [key]: scrubProcedureInput(holder[key]) };
+  }
+  return next;
+}
+
+/**
+ * A breadcrumb: its message, and its data with the URL fields read as URLs
+ * (`http.query` with the host of `url`, see `scrubUrlFields`).
+ */
+function scrubBreadcrumb<B extends SentryBreadcrumbLike>(b: B, seen: WeakSet<object>): B {
+  return {
+    ...b,
+    message: typeof b.message === "string" ? scrubText(b.message) : b.message,
+    data: b.data === undefined ? undefined : scrubDeep(scrubUrlFields(b.data), seen),
+  };
+}
+
+/**
  * Every free-text and structured field of an event (error or transaction)
  * that can carry PII. Fields absent from the input stay absent.
  */
@@ -192,12 +247,15 @@ function scrubEvent<E extends SentryEventLike>(event: E): E {
 
   if (event.request) {
     const r = event.request;
+    // The query string is kept apart from its URL: the URL (and the route in
+    // the transaction name) says whether `input` is a tRPC input.
+    const ctx = urlContextOf(r.url, event.transaction);
     next.request = {
       ...r,
-      url: typeof r.url === "string" ? scrubText(r.url) : r.url,
+      url: typeof r.url === "string" ? scrubUrl(r.url) : r.url,
       env: r.env === undefined ? undefined : (scrubDeep(r.env, seen) as Record<string, unknown>),
-      data: r.data === undefined ? undefined : scrubRequestData(r.data, seen),
-      query_string: r.query_string === undefined ? undefined : scrubQueryString(r.query_string),
+      data: r.data === undefined ? undefined : scrubRequestData(r.data, seen, ctx.trpc === true),
+      query_string: r.query_string === undefined ? undefined : scrubQueryString(r.query_string, ctx),
       cookies: r.cookies === undefined ? undefined : scrubCookies(r.cookies),
       headers: r.headers ? scrubHeaderValues(r.headers) : undefined,
     };
@@ -221,22 +279,17 @@ function scrubEvent<E extends SentryEventLike>(event: E): E {
     };
   }
 
-  if (event.breadcrumbs) {
-    next.breadcrumbs = event.breadcrumbs.map((b) => ({
-      ...b,
-      message: typeof b.message === "string" ? scrubText(b.message) : b.message,
-      data: b.data === undefined ? undefined : scrubDeep(b.data, seen),
-    }));
-  }
+  if (event.breadcrumbs) next.breadcrumbs = event.breadcrumbs.map((b) => scrubBreadcrumb(b, seen));
 
-  if (event.extra) next.extra = scrubDeep(event.extra, seen) as Record<string, unknown>;
-  if (event.contexts) next.contexts = scrubContexts(event.contexts, seen) as Record<string, unknown>;
+  // `extra.input` / `extra.rawInput`: what apps name a procedure input they attach by hand.
+  if (event.extra) next.extra = scrubDeep(withProcedureInputs(event.extra, ["input", "rawInput"]), seen) as Record<string, unknown>;
+  if (event.contexts) next.contexts = scrubContexts(withTraceUrlFields(event.contexts), seen) as Record<string, unknown>;
 
   if (event.spans) {
     next.spans = event.spans.map((s) => ({
       ...s,
       description: typeof s.description === "string" ? scrubText(s.description) : s.description,
-      data: s.data === undefined ? undefined : scrubDeep(s.data, seen),
+      data: s.data === undefined ? undefined : scrubDeep(scrubUrlFields(s.data), seen),
     }));
   }
 
@@ -344,6 +397,92 @@ export function scrubSentryEvent<E extends SentryEventLike>(event: E): E {
  */
 export function createSentryBeforeSendTransaction<E extends SentryEventLike>(): (event: E) => E {
   return (event: E): E => scrubSentryEvent(event);
+}
+
+/**
+ * `beforeBreadcrumb`: the URL, message and top-level scrubbing of the
+ * breadcrumbs of `beforeSend`, applied when the breadcrumb is RECORDED (nested
+ * objects are left to `beforeSend`, see `scrubRecordedBreadcrumbData`). `beforeSend` already cleans the
+ * breadcrumbs joined to an event; this hook keeps the raw ones (an outgoing
+ * call's `http.query`, a fetch `url`, a navigation `to`) out of the scope
+ * buffer, where anything else that reads it — an integration, an app's own
+ * `beforeSend` running before ours — would see them in clear.
+ *
+ * Fail-closed: a breadcrumb whose scrubbing throws keeps its type, category,
+ * level and timestamp, and loses its message and data.
+ */
+export function createSentryBeforeBreadcrumb<B extends SentryBreadcrumbLike>(): (breadcrumb: B) => B {
+  return (breadcrumb: B): B => {
+    try {
+      return {
+        ...breadcrumb,
+        message: typeof breadcrumb.message === "string" ? scrubText(breadcrumb.message) : breadcrumb.message,
+        data: breadcrumb.data === undefined ? undefined : scrubRecordedBreadcrumbData(breadcrumb.data),
+      };
+    } catch {
+      const kept: SentryBreadcrumbLike = { message: REDACTED_VALUE };
+      for (const key of ["type", "category", "level", "timestamp"] as const) {
+        try {
+          const v = breadcrumb[key];
+          if (v !== undefined) (kept as Record<string, unknown>)[key] = v;
+          // eslint-disable-next-line @groupe-j/no-error-swallow -- this IS the error path: an unreadable field is left out so the breadcrumb still records.
+        } catch {
+          // Unreadable field: leave it out.
+        }
+      }
+      return kept as B;
+    }
+  };
+}
+
+/** Loose Session Replay recording event (rrweb event or Sentry custom frame). */
+export interface ReplayRecordingEventLike {
+  type?: number;
+  timestamp?: number;
+  data?: unknown;
+}
+
+/** rrweb `EventType.Custom`: the Sentry frames (`breadcrumb`, `performanceSpan`…). */
+const RRWEB_CUSTOM = 5;
+
+/**
+ * Optional `beforeAddRecordingEvent` for `replayIntegration` — NOT wired by the
+ * init helpers. Session Replay recordings go through none of the event hooks.
+ *
+ * Scope, as the SDK calls it (10.76: `maybeApplyCallback` runs the callback on
+ * CUSTOM events only): the Sentry frames of a recording — breadcrumb frames
+ * (`navigation` `to`/`from`, console, fetch) and `performanceSpan` frames, whose
+ * `description` is the URL of each request (`resource.fetch`…) and navigation
+ * (`navigation.push`). This applies the URL scrubbing to their `description`,
+ * `message` and `data`.
+ *
+ * NOT reachable from here: the page URL of the recording (the rrweb meta
+ * event's `href`) and the DOM (snapshots, mutations — left to `maskAllText` /
+ * `blockAllMedia`). Keep a position out of the page URL in the app, or stop
+ * Replay from capturing it.
+ *
+ *   replayIntegration({ beforeAddRecordingEvent: createReplayBeforeAddRecordingEvent() })
+ *
+ * The returned callback is generic, so it is assignable to the SDK's
+ * `beforeAddRecordingEvent` without a cast. Fail-closed: an event whose
+ * scrubbing throws is dropped (`null`).
+ */
+export function createReplayBeforeAddRecordingEvent(): <E extends ReplayRecordingEventLike>(event: E) => E | null {
+  return <E extends ReplayRecordingEventLike>(event: E): E | null => {
+    try {
+      const data = event.data as Record<string, unknown> | undefined;
+      if (event.type !== RRWEB_CUSTOM || !data || typeof data !== "object") return event;
+      const payload = data.payload as Record<string, unknown> | undefined;
+      if (!payload || typeof payload !== "object") return event;
+      const next: Record<string, unknown> = { ...payload };
+      if (typeof payload.description === "string") next.description = scrubUrl(payload.description);
+      if (typeof payload.message === "string") next.message = scrubText(payload.message);
+      if (payload.data !== undefined) next.data = scrubDeep(scrubUrlFields(payload.data));
+      return { ...event, data: { ...data, payload: next } };
+    } catch {
+      return null;
+    }
+  };
 }
 
 // Loose Sentry log shape (`beforeSendLog`).

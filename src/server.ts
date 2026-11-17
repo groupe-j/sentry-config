@@ -12,6 +12,7 @@
 
 import * as Sentry from "@sentry/nextjs";
 import {
+  createSentryBeforeBreadcrumb,
   createSentryBeforeSend,
   createSentryBeforeSendLog,
   createSentryBeforeSendTransaction,
@@ -135,6 +136,7 @@ export function initSentryServer(opts: InitSentryServerOptions): void {
     beforeSend: createSentryBeforeSend(app),
     beforeSendTransaction: createSentryBeforeSendTransaction(),
     beforeSendLog: createSentryBeforeSendLog(),
+    beforeBreadcrumb: createSentryBeforeBreadcrumb(),
     _experiments: { enableLogs: true },
     // Opt-in transport override (getsentry/sentry-javascript#18871). Only spread
     // when provided so the SDK default is preserved for healthy setups.

@@ -12,23 +12,32 @@
 
 export {
   SCRUB_FAILED_TAG,
+  createReplayBeforeAddRecordingEvent,
+  createSentryBeforeBreadcrumb,
   createSentryBeforeSend,
   createSentryBeforeSendLog,
   createSentryBeforeSendTransaction,
   scrubSentryEvent,
+  type ReplayRecordingEventLike,
+  type SentryBreadcrumbLike,
   type SentryEventLike,
   type SentryLogLike,
 } from "./before-send.js";
 
 export {
   REDACTED_VALUE,
+  isPositionName,
   isSecretName,
   isSecretParam,
   scrubCookies,
   scrubDeep,
+  scrubProcedureInput,
   scrubQueryString,
   scrubRequestData,
   scrubText,
+  scrubUrl,
+  scrubUrlQuery,
+  type UrlScrubContext,
 } from "./scrub.js";
 
 export {
